@@ -1,0 +1,67 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bio-ml-preflight"
+version = "0.1.0"
+description = "Evidence-first capability audits for biological machine-learning claims"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+  "jinja2>=3.1",
+  "matplotlib>=3.9",
+  "numpy>=2.0,<2.3",
+  "pandas>=2.2",
+  "pyarrow>=17",
+  "pydantic>=2.9",
+  "pyyaml>=6.0",
+  "scikit-learn>=1.5",
+  "scipy>=1.14",
+  "typer>=0.12",
+]
+
+[project.optional-dependencies]
+chem = ["rdkit>=2024.3"]
+tdc = ["pytdc>=0.4", "rdkit>=2024.3", "setuptools>=70,<81"]
+dev = [
+  "mypy>=1.11",
+  "pandas-stubs>=2.2",
+  "pytest>=8.3",
+  "ruff>=0.6",
+  "types-pyyaml>=6.0",
+]
+
+[project.scripts]
+bio-ml-preflight = "bio_ml_preflight.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/bio_ml_preflight"]
+
+[tool.uv]
+# PyTDC 0.4.1 names the obsolete rdkit-pypi distribution. The maintained
+# rdkit wheel above supplies the same import with current Python/NumPy support.
+override-dependencies = ["rdkit-pypi; python_version < '0'"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+packages = ["bio_ml_preflight"]
+
+[[tool.mypy.overrides]]
+module = ["numpy", "numpy.*", "scipy.*", "sklearn.*", "tdc.*", "rdkit.*"]
+follow_imports = "skip"
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+markers = ["network: requires a public dataset download"]

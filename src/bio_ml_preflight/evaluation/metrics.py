@@ -1,0 +1,153 @@
+from __future__ import annotations
+
+from collections.abc import Callable
+from typing import Any
+
+import numpy as np
+import numpy.typing as npt
+import pandas as pd
+from scipy.stats import kendalltau, spearmanr
+from sklearn.metrics import (
+    average_precision_score,
+    balanced_accuracy_score,
+    log_loss,
+    mean_absolute_error,
+    mean_squared_error,
+    ndcg_score,
+    roc_auc_score,
+)
+
+
+def _correlation(
+    function: Callable[..., Any],
+    y_true: npt.NDArray[np.float64],
+    y_pred: npt.NDArray[np.float64],
+) -> float:
+    if len(y_true) < 2 or np.ptp(y_true) <= 1e-12 or np.ptp(y_pred) <= 1e-12:
+        return float("nan")
+    return float(function(y_true, y_pred).statistic)
+
+
+def _pearson(y_true: npt.NDArray[np.float64], y_pred: npt.NDArray[np.float64]) -> float:
+    if len(y_true) < 2 or np.ptp(y_true) <= 1e-12 or np.ptp(y_pred) <= 1e-12:
+        return float("nan")
+    left = y_true - np.mean(y_true)
+    right = y_pred - np.mean(y_pred)
+    left /= np.max(np.abs(left))
+    right /= np.max(np.abs(right))
+    denominator = np.sqrt(np.sum(left * left) * np.sum(right * right))
+    return float(np.sum(left * right) / denominator)
+
+
+def compute_metrics(
+    y_true: npt.NDArray[np.float64],
+    y_pred: npt.NDArray[np.float64],
+    task_kind: str,
+) -> dict[str, float | None]:
+    finite = np.isfinite(y_true) & np.isfinite(y_pred)
+    y_true, y_pred = y_true[finite], y_pred[finite]
+    if not len(y_true):
+        return {"applicable": None}
+    if task_kind == "binary_classification":
+        predicted_class = (y_pred >= 0.5).astype(int)
+        both_classes = len(np.unique(y_true)) == 2
+        return {
+            "balanced_accuracy": float(balanced_accuracy_score(y_true, predicted_class)),
+            "roc_auc": float(roc_auc_score(y_true, y_pred)) if both_classes else None,
+            "average_precision": float(average_precision_score(y_true, y_pred))
+            if both_classes
+            else None,
+            "log_loss": float(log_loss(y_true, np.clip(y_pred, 1e-7, 1 - 1e-7))),
+        }
+    return {
+        "mae": float(mean_absolute_error(y_true, y_pred)),
+        "rmse": float(mean_squared_error(y_true, y_pred) ** 0.5),
+        "pearson": _pearson(y_true, y_pred),
+        "spearman": _correlation(spearmanr, y_true, y_pred),
+        "kendall": _correlation(kendalltau, y_true, y_pred),
+    }
+
+
+def bootstrap_interval(
+    values: pd.DataFrame,
+    *,
+    unit_column: str,
+    statistic: Callable[[pd.DataFrame], float],
+    seed: int = 2026,
+    draws: int = 400,
+    confidence: float = 0.95,
+) -> dict[str, float]:
+    if unit_column not in values:
+        raise ValueError(f"Independent bootstrap unit {unit_column!r} is missing")
+    groups = list(values.groupby(unit_column, sort=False).groups.values())
+    if len(groups) < 2:
+        raise ValueError("At least two independent units are required for bootstrap")
+    rng = np.random.default_rng(seed)
+    estimates = []
+    for _ in range(draws):
+        sampled = rng.integers(0, len(groups), size=len(groups))
+        positions = np.concatenate([np.asarray(groups[index]) for index in sampled])
+        estimates.append(statistic(values.loc[positions]))
+    alpha = (1 - confidence) / 2
+    return {
+        "estimate": float(statistic(values)),
+        "lower": float(np.nanquantile(estimates, alpha)),
+        "upper": float(np.nanquantile(estimates, 1 - alpha)),
+        "unit_count": float(len(groups)),
+    }
+
+
+def per_group_ranking_metrics(
+    predictions: pd.DataFrame,
+    *,
+    group_column: str,
+    truth_column: str = "y_true",
+    prediction_column: str = "y_pred",
+    k: int = 5,
+) -> dict[str, float | None]:
+    correlations, ndcgs = [], []
+    for _, group in predictions.groupby(group_column):
+        if len(group) < 2:
+            continue
+        correlations.append(
+            _correlation(
+                spearmanr, group[truth_column].to_numpy(), group[prediction_column].to_numpy()
+            )
+        )
+        relevance = group[truth_column].to_numpy(dtype=float)
+        relevance = relevance - np.nanmin(relevance)
+        if np.any(relevance > 0):
+            ndcgs.append(
+                float(ndcg_score([relevance], [group[prediction_column]], k=min(k, len(group))))
+            )
+    finite_correlations = [value for value in correlations if np.isfinite(value)]
+    return {
+        "per_group_spearman_median": (
+            float(np.median(finite_correlations)) if finite_correlations else None
+        ),
+        "ndcg_at_k_median": float(np.nanmedian(ndcgs)) if ndcgs else None,
+        "groups_evaluated": float(len(correlations)),
+    }
+
+
+def group_respecting_permutation(
+    values: npt.NDArray[Any], groups: npt.NDArray[Any] | None, seed: int
+) -> npt.NDArray[Any]:
+    rng = np.random.default_rng(seed)
+    values = np.asarray(values)
+    if groups is None:
+        return rng.permutation(values)
+    groups = np.asarray(groups)
+    output = values.copy()
+    grouped_positions = [np.flatnonzero(groups == group) for group in pd.unique(groups)]
+    by_size: dict[int, list[npt.NDArray[np.int64]]] = {}
+    for positions in grouped_positions:
+        by_size.setdefault(len(positions), []).append(positions)
+    for blocks in by_size.values():
+        sources = rng.permutation(len(blocks))
+        if len(blocks) == 1:
+            output[blocks[0]] = rng.permutation(values[blocks[0]])
+        else:
+            for destination, source in zip(blocks, sources, strict=True):
+                output[destination] = rng.permutation(values[blocks[source]])
+    return output

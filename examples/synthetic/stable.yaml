@@ -1,0 +1,14 @@
+schema_version: 1
+case_id: synthetic-stable
+data: {adapter: tabular, path: data/stable.parquet, fingerprint_columns: []}
+task: {kind: regression, prediction_unit: candidate-target pair, target_column: y, higher_is_better: true}
+entities:
+  target: {id_column: target_id, representation_column: null}
+features: {include: [x1, x2], exclude: [], post_outcome: []}
+generalization_scenarios:
+  - {name: random_pair, strategy: random_pair}
+  - {name: cold_target, strategy: group, group_column: target_id}
+evaluation: {seeds: [11, 23, 47], primary_metric: spearman, secondary_metrics: [mae, rmse], bootstrap_unit: target_id}
+decision: {kind: top_k_per_group, group_entity: target, k: [5, 10]}
+role_confirmation: {target: true, prediction_unit: true, features: true}
+

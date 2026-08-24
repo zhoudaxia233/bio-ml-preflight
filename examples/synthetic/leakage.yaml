@@ -1,0 +1,13 @@
+schema_version: 1
+case_id: synthetic-leakage
+data: {adapter: tabular, path: data/leakage.parquet, fingerprint_columns: []}
+task: {kind: regression, prediction_unit: measurement, target_column: y, higher_is_better: true}
+entities:
+  entity: {id_column: entity_id, representation_column: null}
+features: {include: [entity_token, uninformative], exclude: [], post_outcome: []}
+generalization_scenarios:
+  - {name: random_row, strategy: random}
+  - {name: cold_entity, strategy: group, group_column: entity_id}
+evaluation: {seeds: [11, 23, 47], primary_metric: spearman, secondary_metrics: [mae, rmse], bootstrap_unit: entity_id}
+role_confirmation: {target: true, prediction_unit: true, features: true}
+

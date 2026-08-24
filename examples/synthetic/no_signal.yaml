@@ -1,0 +1,13 @@
+schema_version: 1
+case_id: synthetic-no-signal
+data: {adapter: tabular, path: data/no_signal.parquet, fingerprint_columns: []}
+task: {kind: regression, prediction_unit: sample, target_column: y, higher_is_better: true}
+entities:
+  group: {id_column: group_id, representation_column: null}
+features: {include: [x1, x2], exclude: [], post_outcome: []}
+generalization_scenarios:
+  - {name: random_row, strategy: random}
+  - {name: cold_group, strategy: group, group_column: group_id}
+evaluation: {seeds: [11, 23, 47], primary_metric: spearman, secondary_metrics: [mae, rmse], bootstrap_unit: group_id}
+role_confirmation: {target: true, prediction_unit: true, features: true}
+

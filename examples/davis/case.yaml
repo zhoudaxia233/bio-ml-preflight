@@ -1,0 +1,64 @@
+schema_version: 1
+case_id: davis-dti
+data:
+  adapter: davis
+  path: ../../data/cache/davis/davis.parquet
+  fingerprint_columns: [compound_id, target_id, affinity]
+task:
+  kind: regression
+  prediction_unit: compound-target pair
+  target_column: affinity
+  higher_is_better: false
+entities:
+  compound:
+    id_column: compound_id
+    representation_column: smiles
+  target:
+    id_column: target_id
+    representation_column: sequence
+features:
+  include: [smiles, sequence]
+  exclude: []
+  post_outcome: []
+metadata:
+  replicate_id: null
+  biological_replicate_id: null
+  batch_id: null
+  plate_id: null
+  time_column: null
+  treatment_column: null
+  control_value: null
+decision:
+  kind: top_k_per_group
+  group_entity: target
+  k: [5, 10]
+generalization_scenarios:
+  - name: random_pair
+    strategy: random_pair
+  - name: cold_drug
+    strategy: cold_left
+    left_column: compound_id
+  - name: cold_target
+    strategy: cold_right
+    right_column: target_id
+evaluation:
+  seeds: [11, 23, 47, 83, 131]
+  primary_metric: spearman
+  secondary_metrics: [mae, rmse]
+  bootstrap_unit: target_id
+holdout:
+  enabled: false
+  maximum_accesses: 1
+thresholds:
+  supported_metric: 0.5
+  limited_metric: 0.2
+  stable_top_k: 0.65
+  unstable_top_k: 0.5
+  maximum_dispersion: 0.15
+  minimum_permutation_delta: 0.05
+role_confirmation:
+  target: true
+  prediction_unit: true
+  features: true
+  entities: true
+

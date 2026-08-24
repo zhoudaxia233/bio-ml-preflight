@@ -1,0 +1,82 @@
+# bio-ml-preflight
+
+`bio-ml-preflight` asks what a dataset and a proposed prediction or ranking claim can support, where that evidence stops, and what inexpensive evidence would reduce the most important uncertainty. It is an evidence audit and bounded baseline runner—not AutoML, a leaderboard, a biological hypothesis generator, or proof of future performance.
+
+## Quick start
+
+Python 3.11+ and [uv](https://docs.astral.sh/uv/) are required.
+
+```bash
+uv sync --extra dev
+uv run bio-ml-preflight --help
+uv run bio-ml-preflight demo synthetic --budget smoke
+```
+
+Reports land under `reports/` and contain Markdown, HTML, JSON, figures, split manifests, per-run Parquet predictions, aggregate tables, a capability matrix, and provenance.
+
+For an existing table:
+
+```bash
+uv run bio-ml-preflight init-case DATA.csv --output case.yaml
+# Review and confirm every provisional role in case.yaml.
+uv run bio-ml-preflight validate-case case.yaml
+uv run bio-ml-preflight run case.yaml --budget smoke
+```
+
+With no claim, use discovery mode:
+
+```bash
+uv run bio-ml-preflight discover DATA.csv --output discovery/
+```
+
+Discovery produces candidate *testable analysis tasks*. It does not infer mechanisms from column names, promote associations to causal claims, or perform “biological discovery.” Every inferred role remains unconfirmed until a researcher reviews it.
+
+## Why the case matters
+
+Suitability is conditional on the target, prediction unit, deployment population, generalization axis, decision rule, and validation design. Ten thousand measurements from ten patients are not ten thousand independent samples. Random row splits can place the same patient, molecule, target, batch, or near-duplicate in both sets; they are useful diagnostics but cannot establish unseen-entity performance.
+
+Ranking decisions need decision-level evidence. Similar RMSE values can conceal different top candidates, so reports include top-k overlap, selection probability, and rank variability. No single feasibility score is emitted. Each scenario receives one transparent status: `SUPPORTED`, `SUPPORTED_WITH_LIMITS`, `INSUFFICIENT_EVIDENCE`, `CONTRADICTED`, or `NOT_ASSESSABLE`, with the numbers and assumptions behind it.
+
+## Case schema and validation
+
+The versioned YAML schema is implemented with Pydantic v2 in `contracts/case.py`. Missing scientific metadata is not guessed. Its downstream question becomes `NOT_ASSESSABLE` or explicitly limited. Learned imputation, encoding, and scaling stay inside scikit-learn training pipelines. Split manifests are checksummed and reused.
+
+The baseline suite is deliberately bounded: dummy, linear/logistic, regularized linear, extra trees, histogram gradient boosting, and nearest neighbours. Smoke budgets use a strict subset. Pairwise cases also get entity-mean baselines and deterministic character/sequence representations. `uv sync --extra chem` enables RDKit utilities; the base package needs no GPU framework.
+
+## Davis demo
+
+The dataset is never committed. The official TDC loader writes a checksummed cache and source record under gitignored `data/cache/`.
+
+```bash
+uv sync --python 3.11 --all-extras
+uv run --python 3.11 bio-ml-preflight demo davis --budget smoke
+uv run bio-ml-preflight run examples/davis/case.yaml --budget standard
+```
+
+The case compares random-pair, cold-drug, and cold-target splits. Davis is public, so any local “holdout” is pseudo-sealed, not truly blinded.
+
+## Constrained Autoprobe
+
+Autoprobe freezes the case, evaluator, metrics, manifests, holdout policy, and provenance. Only `candidate.yaml` changes. Unlike unrestricted autoresearch, it has bounded experiments, multiple scientific guardrails, a vector result instead of one universal score, and no final-holdout access.
+
+```bash
+uv run bio-ml-preflight autoprobe prepare CASE.yaml --run-dir runs/example
+uv run bio-ml-preflight autoprobe evaluate runs/example/candidate.yaml
+```
+
+## Extension points
+
+A dataset adapter normalizes a source into a DataFrame/Parquet table, records source/version/retrieval/checksum metadata, and returns columns referenced by the same `CaseSpec`; `data/davis.py` is the working example. A future AnnData or LINCS L1000 adapter would do that normalization without changing audits or split contracts. A multi-output gene-expression task would extend target validation and metric aggregation (per-gene, per-cell type, and decision-weighted summaries) while retaining the same independent-unit, split-manifest, holdout, provenance, and capability contracts.
+
+DataSAIL is a future optional split provider: its assignment can be normalized into the existing persisted manifest and evaluated by the same overlap audit. It is intentionally not a v0.1 dependency.
+
+## Development
+
+```bash
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy src
+uv run pytest
+```
+
+See [architecture](docs/architecture.md), [methodology](docs/methodology.md), [limitations](docs/limitations.md), [Autoprobe](docs/autoresearch.md), and [references](docs/references.md).

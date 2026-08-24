@@ -1,0 +1,23 @@
+from pathlib import Path
+
+import pytest
+import yaml
+from pydantic import ValidationError
+
+from bio_ml_preflight.contracts import CaseSpec, load_case
+
+
+def test_case_validation_and_relative_path(tmp_path: Path) -> None:
+    payload = {
+        "schema_version": 1,
+        "case_id": "x",
+        "data": {"path": "data.csv"},
+        "task": {"kind": "regression", "prediction_unit": "sample", "target_column": "y"},
+        "generalization_scenarios": [{"name": "g", "strategy": "group"}],
+    }
+    with pytest.raises(ValidationError, match="group_column"):
+        CaseSpec.model_validate(payload)
+    payload["generalization_scenarios"][0]["group_column"] = "patient_id"
+    path = tmp_path / "case.yaml"
+    path.write_text(yaml.safe_dump(payload), encoding="utf-8")
+    assert Path(load_case(path).data.path) == tmp_path / "data.csv"

@@ -1,0 +1,10 @@
+schema_version: 1
+candidate_id: elastic-net-baseline
+case_path: /absolute/path/to/run/case.yaml
+model: elastic_net
+budget: smoke
+complexity: {family: linear, tunable_parameters: 1}
+minimum_delta: 0.01
+maximum_runtime_seconds: 300
+maximum_worst_scenario_regression: 0.02
+maximum_stability_regression: 0.05
