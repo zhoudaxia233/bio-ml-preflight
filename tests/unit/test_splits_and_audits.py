@@ -42,6 +42,7 @@ def test_entity_target_and_representation_conflicts_are_reported(tmp_path) -> No
     )
     case = synthetic_case("no_signal", tmp_path / "unused.parquet")
     case.task.target_column = "y"
+    case.task.prediction_unit = "compound"
     case.entities = {
         "compound": EntitySpec(id_column="compound_id", representation_column="smiles")
     }
@@ -51,3 +52,38 @@ def test_entity_target_and_representation_conflicts_are_reported(tmp_path) -> No
     assert compound["conflicting_target_entities"] == 1
     assert compound["inconsistent_representation_entities"] == 1
     assert len(result["warnings"]) == 3
+
+
+def test_partial_entity_does_not_define_prediction_unit_label_consistency(tmp_path) -> None:
+    frame = pd.DataFrame(
+        {
+            "target_id": ["x", "x", "y", "y"],
+            "candidate": ["a", "b", "a", "b"],
+            "y": [0.1, 0.9, 0.2, 0.8],
+        }
+    )
+    case = synthetic_case("stable", tmp_path / "unused.parquet")
+
+    target = audit_dataset(frame, case)["independence"]["entities"]["target"]
+    assert "conflicting_target_entities" not in target
+
+
+def test_pairwise_target_variation_is_not_an_entity_label_conflict(tmp_path) -> None:
+    frame = pd.DataFrame(
+        {
+            "compound_id": ["a", "a", "b", "b"],
+            "target_id": ["x", "y", "x", "y"],
+            "y": [0.1, 0.9, 0.2, 0.8],
+        }
+    )
+    case = synthetic_case("stable", tmp_path / "unused.parquet")
+    case.task.target_column = "y"
+    case.entities = {
+        "compound": EntitySpec(id_column="compound_id"),
+        "target": EntitySpec(id_column="target_id"),
+    }
+
+    result = audit_dataset(frame, case)["independence"]
+    assert "conflicting_target_entities" not in result["entities"]["compound"]
+    assert "conflicting_target_entities" not in result["entities"]["target"]
+    assert result["pair_structure"]["conflicting_label_pairs"] == 0

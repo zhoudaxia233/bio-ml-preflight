@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from bio_ml_preflight.contracts import CaseSpec
+from bio_ml_preflight.contracts.case import ScenarioSpec
 from bio_ml_preflight.evaluation.metrics import empirical_permutation_summary
 
 Status = str
@@ -15,6 +16,9 @@ def capability_matrix(
     experiments: pd.DataFrame,
     case: CaseSpec,
     ranking: dict[str, Any],
+    *,
+    audits: dict[str, Any] | None = None,
+    overlap_results: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     primary = case.evaluation.primary_metric
     usable = experiments[experiments["model"].ne("dummy")]
@@ -22,8 +26,12 @@ def capability_matrix(
         usable["strategy"].isin(["random", "random_pair"]) & usable["permuted"].eq(False)
     ][primary]
     random_median = float(random_values.median()) if random_values.notna().any() else None
-    rows = []
+    rows: list[dict[str, Any]] = []
+    audit_summary = _audit_conflicts(audits or {})
+    scenario_overlap_summaries: list[dict[str, float | int]] = []
     for scenario in case.generalization_scenarios:
+        scenario_overlap = _overlap_summary(overlap_results or {}, case, scenario)
+        scenario_overlap_summaries.append(scenario_overlap)
         current = usable[usable["scenario"].eq(scenario.name)]
         real = current[current["permuted"].eq(False)]
         control = current[current["permuted"].eq(True)]
@@ -126,18 +134,22 @@ def capability_matrix(
             status = "SUPPORTED_WITH_LIMITS"
             unmet.append("Evidence is moderate or sensitive to the sampled split.")
             next_step = "Increase independent entity coverage at the weakest split boundary."
-        rows.append(
-            _verdict(
-                scenario.name,
-                status,
-                evidence_for,
-                evidence_against,
-                f"Across-split standard deviation={dispersion:.3f}.",
-                unmet,
-                next_step,
-                numbers,
-            )
+        verdict = _verdict(
+            scenario.name,
+            status,
+            evidence_for,
+            evidence_against,
+            f"Across-split standard deviation={dispersion:.3f}.",
+            unmet,
+            next_step,
+            numbers,
         )
+        _apply_audit_limits(
+            verdict,
+            audit_summary,
+            scenario_overlap,
+        )
+        rows.append(verdict)
     if case.decision.kind == "top_k_per_group":
         k = str(min(case.decision.k))
         top = ranking.get("top_k", {}).get(k, {})
@@ -154,16 +166,202 @@ def capability_matrix(
         else:
             status = "SUPPORTED"
             evidence_against = []
+        verdict = _verdict(
+            f"top-{k} selection within {case.decision.group_entity}",
+            status,
+            [] if overlap is None else [f"Observed top-{k} overlap={overlap:.3f}."],
+            evidence_against,
+            "Development-run membership variation; no final holdout exposure.",
+            [] if status == "SUPPORTED" else ["Candidate membership changes across runs."],
+            "Measure the borderline candidates again, then evaluate the locked ranking once.",
+            {"average_pairwise_jaccard": overlap},
+        )
+        combined_overlap = {
+            key: max(float(summary.get(key, 0)) for summary in scenario_overlap_summaries)
+            for key in {
+                "exact_duplicate_overlap",
+                "pair_overlap",
+                "protected_entity_overlap_count",
+                "protected_entity_overlap_fraction",
+            }
+        }
+        _apply_audit_limits(verdict, audit_summary, combined_overlap)
+        rows.append(verdict)
+    if audits:
+        rows.append(_measurement_verdict(audits.get("measurement", {})))
+        rows.extend(_missing_metadata_verdicts(audits.get("missing_high_value_metadata", [])))
+    return rows
+
+
+def _audit_conflicts(audits: dict[str, Any]) -> dict[str, int]:
+    independence = audits.get("independence", {})
+    entities = independence.get("entities", {})
+    pair = independence.get("pair_structure", {})
+    if pair.get("columns"):
+        target_conflicts = int(pair.get("conflicting_label_pairs", 0))
+    else:
+        target_conflicts = sum(
+            int(result.get("conflicting_target_entities", 0))
+            for result in entities.values()
+            if isinstance(result, dict)
+        )
+    representation_conflicts = sum(
+        int(result.get("inconsistent_representation_entities", 0))
+        for result in entities.values()
+        if isinstance(result, dict)
+    )
+    return {
+        "conflicting_target_entities": target_conflicts,
+        "inconsistent_representation_entities": representation_conflicts,
+    }
+
+
+def _overlap_summary(
+    overlap_results: dict[str, Any], case: CaseSpec, scenario: ScenarioSpec
+) -> dict[str, float | int]:
+    protected_columns = {
+        value
+        for value in (
+            scenario.group_column if scenario.strategy in {"group", "scaffold"} else None,
+            scenario.left_column if scenario.strategy in {"cold_left", "double_cold"} else None,
+            scenario.right_column if scenario.strategy in {"cold_right", "double_cold"} else None,
+        )
+        if value is not None
+    }
+    protected_entities = {
+        name
+        for name, entity in case.entities.items()
+        if entity.id_column in protected_columns
+        or (scenario.strategy == "scaffold" and entity.representation_column in protected_columns)
+    }
+    summary: dict[str, float | int] = {
+        "exact_duplicate_overlap": 0,
+        "pair_overlap": 0,
+        "protected_entity_overlap_count": 0,
+        "protected_entity_overlap_fraction": 0.0,
+    }
+    for key, result in overlap_results.items():
+        if key.rsplit(":", 1)[0] != scenario.name:
+            continue
+        summary["exact_duplicate_overlap"] = max(
+            int(summary["exact_duplicate_overlap"]),
+            int(result.get("exact_duplicate_overlap", 0)),
+        )
+        summary["pair_overlap"] = max(
+            int(summary["pair_overlap"]), int(result.get("pair_overlap") or 0)
+        )
+        for entity_name in protected_entities:
+            entity_overlap = result.get("entity_overlap", {}).get(entity_name, {})
+            summary["protected_entity_overlap_count"] = max(
+                int(summary["protected_entity_overlap_count"]),
+                int(entity_overlap.get("count", 0)),
+            )
+            summary["protected_entity_overlap_fraction"] = max(
+                float(summary["protected_entity_overlap_fraction"]),
+                float(entity_overlap.get("test_fraction", 0.0)),
+            )
+    return summary
+
+
+def _apply_audit_limits(
+    verdict: dict[str, Any],
+    conflicts: dict[str, int],
+    overlap: dict[str, float | int],
+) -> None:
+    target_conflicts = conflicts.get("conflicting_target_entities", 0)
+    representation_conflicts = conflicts.get("inconsistent_representation_entities", 0)
+    if target_conflicts:
+        verdict["evidence_against"].append(
+            f"{target_conflicts} identical prediction units have conflicting targets."
+        )
+        verdict["numbers"]["conflicting_target_entities"] = target_conflicts
+    if representation_conflicts:
+        verdict["evidence_against"].append(
+            f"{representation_conflicts} entity identifiers map to inconsistent representations."
+        )
+        verdict["numbers"]["inconsistent_representation_entities"] = representation_conflicts
+    exact_overlap = int(overlap.get("exact_duplicate_overlap", 0))
+    pair_overlap = int(overlap.get("pair_overlap", 0))
+    protected_overlap = int(overlap.get("protected_entity_overlap_count", 0))
+    if exact_overlap:
+        verdict["evidence_against"].append(
+            f"Up to {exact_overlap} exact records overlap train and test."
+        )
+        verdict["numbers"]["exact_duplicate_overlap"] = exact_overlap
+    if pair_overlap:
+        verdict["evidence_against"].append(
+            f"Up to {pair_overlap} entity pairs overlap train and test."
+        )
+        verdict["numbers"]["pair_overlap"] = pair_overlap
+    if protected_overlap:
+        fraction = float(overlap.get("protected_entity_overlap_fraction", 0.0))
+        entity_label = "entity" if protected_overlap == 1 else "entities"
+        verdict["evidence_against"].append(
+            f"The declared held-out entity boundary has {protected_overlap} overlapping "
+            f"{entity_label} "
+            f"(maximum test fraction {fraction:.3%})."
+        )
+        verdict["numbers"]["protected_entity_overlap_count"] = protected_overlap
+        verdict["numbers"]["protected_entity_overlap_fraction"] = fraction
+    if not any(
+        [target_conflicts, representation_conflicts, exact_overlap, pair_overlap, protected_overlap]
+    ):
+        return
+    if verdict["status"] == "SUPPORTED":
+        verdict["status"] = "SUPPORTED_WITH_LIMITS"
+    verdict["unmet_assumptions"].append(
+        "Entity identity, target consistency, and split isolation must be resolved."
+    )
+    verdict["cheapest_next_evidence"] = (
+        "Resolve conflicting entity records and regenerate overlap-free split manifests."
+    )
+
+
+def _measurement_verdict(measurement: dict[str, Any]) -> dict[str, Any]:
+    if measurement.get("status") == "ASSESSED":
+        return _verdict(
+            "measurement reliability",
+            "SUPPORTED_WITH_LIMITS",
+            ["Replicate-aware dispersion proxies were computed."],
+            [str(measurement.get("noise_warning", "No proven noise ceiling is available."))],
+            "Empirical replicate proxies are not a proven noise ceiling.",
+            ["Confirm measurement reliability under the intended assay protocol."],
+            "Repeat a representative subset under the intended assay protocol.",
+            {key: value for key, value in measurement.items() if key != "status"},
+        )
+    reason = str(measurement.get("reason", "Replicate evidence was not supplied."))
+    return _verdict(
+        "measurement reliability",
+        "NOT_ASSESSABLE",
+        [],
+        [reason],
+        "Within- and between-replicate variation cannot be separated.",
+        ["Technical or biological replicate identifiers are missing."],
+        "Add replicate identifiers or repeat a representative subset before confirmation.",
+        {},
+    )
+
+
+def _missing_metadata_verdicts(items: list[str]) -> list[dict[str, Any]]:
+    rows = []
+    for item in items:
+        key, _, reason = item.partition(":")
+        if key == "replicate identifiers":
+            continue
+        claim = {
+            "batch_id": "batch confounding",
+            "time_column": "temporal generalization",
+        }.get(key, f"metadata: {key}")
         rows.append(
             _verdict(
-                f"top-{k} selection within {case.decision.group_entity}",
-                status,
-                [] if overlap is None else [f"Observed top-{k} overlap={overlap:.3f}."],
-                evidence_against,
-                "Development-run membership variation; no final holdout exposure.",
-                [] if status == "SUPPORTED" else ["Candidate membership changes across runs."],
-                "Measure the borderline candidates again, then evaluate the locked ranking once.",
-                {"average_pairwise_jaccard": overlap},
+                claim,
+                "NOT_ASSESSABLE",
+                [],
+                [reason.strip() or f"Missing {key}."],
+                "Required metadata was not supplied.",
+                [f"{key} is required for this assessment."],
+                f"Add {key} metadata and rerun the deterministic audit.",
+                {"missing_metadata": key},
             )
         )
     return rows

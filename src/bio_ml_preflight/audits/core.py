@@ -52,7 +52,6 @@ def audit_dataset(frame: pd.DataFrame, case: CaseSpec) -> dict[str, Any]:
             continue
         entity_columns.append(column)
         counts = frame[column].value_counts()
-        target_conflicts = frame.groupby(column, dropna=False)[target].nunique(dropna=True)
         entity_result: dict[str, Any] = {
             "id_column": column,
             "unique": int(counts.size),
@@ -62,8 +61,12 @@ def audit_dataset(frame: pd.DataFrame, case: CaseSpec) -> dict[str, Any]:
                 "max": int(counts.max()),
             },
             "duplicate_identifier_rows": int(frame[column].duplicated(keep=False).sum()),
-            "conflicting_target_entities": int((target_conflicts > 1).sum()),
         }
+        prediction_unit = case.task.prediction_unit.lower().replace("-", "_").replace(" ", "_")
+        entity_aliases = {name.lower(), entity.id_column.lower().removesuffix("_id")}
+        if len(case.entities) == 1 and prediction_unit in entity_aliases:
+            target_conflicts = frame.groupby(column, dropna=False)[target].nunique(dropna=True)
+            entity_result["conflicting_target_entities"] = int((target_conflicts > 1).sum())
         representation = entity.representation_column
         if representation and representation in frame:
             representation_counts = frame.groupby(column, dropna=False)[representation].nunique(

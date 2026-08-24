@@ -262,7 +262,13 @@ def run_case(
             pd.DataFrame(),
         )
     decomposition = stability_decomposition(experiments, case.evaluation.primary_metric)
-    capability = capability_matrix(experiments, case, ranking)
+    capability = capability_matrix(
+        experiments,
+        case,
+        ranking,
+        audits=audits,
+        overlap_results=overlap_results,
+    )
     unconfirmed = sorted(key for key, confirmed in case.role_confirmation.items() if not confirmed)
     if unconfirmed:
         for verdict in capability:

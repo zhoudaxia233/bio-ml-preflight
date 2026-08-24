@@ -229,7 +229,7 @@ def write_report(
             "numbers": json.dumps(row["numbers"], sort_keys=True),
         }
         for row in capability
-        if not row["claim_or_scenario"].startswith("top-")
+        if row["claim_or_scenario"] in {scenario.name for scenario in case.generalization_scenarios}
     ]
     context = {
         "case": case,
