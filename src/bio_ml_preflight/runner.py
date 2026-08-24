@@ -121,50 +121,58 @@ def run_case(
                 if model_name != "dummy":
                     ranking_predictions.append(prediction)
                     groups = _permutation_groups(frame.iloc[train_indices], case)
-                    permuted_target = group_respecting_permutation(
-                        target[train_indices], groups, seed + 10_000
-                    )
-                    perm_model = build_probe_suite(features, case.task.kind, seed, budget)[
-                        model_name
-                    ]
-                    perm_started = time.perf_counter()
-                    perm_model.fit(features.iloc[train_indices], permuted_target)
-                    with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
-                        if case.task.kind == "binary_classification":
-                            perm_prediction = perm_model.predict_proba(features.iloc[test_indices])[
-                                :, 1
-                            ]
-                        else:
-                            perm_prediction = perm_model.predict(features.iloc[test_indices])
-                    records.append(
-                        _record(
-                            scenario.name,
-                            scenario.strategy,
-                            seed,
-                            model_name,
-                            True,
-                            time.perf_counter() - perm_started,
-                            len(train_indices),
-                            len(test_indices),
-                            compute_metrics(
-                                target[test_indices], np.asarray(perm_prediction), case.task.kind
-                            ),
-                            model_configuration=_model_configuration(perm_model),
+                    for draw in range(case.evaluation.permutation_draws):
+                        permutation_seed = seed + 10_000 + 1_000 * draw
+                        permuted_target = group_respecting_permutation(
+                            target[train_indices], groups, permutation_seed
                         )
-                    )
-                    permutation_run_id = f"{scenario.name}__{model_name}__permuted__seed-{seed}"
-                    permutation_frame = frame.iloc[test_indices].copy()
-                    permutation_frame["_row_id"] = test_indices
-                    permutation_frame["y_true"] = target[test_indices]
-                    permutation_frame["y_pred"] = perm_prediction
-                    permutation_frame["is_test"] = True
-                    permutation_frame["run_id"] = permutation_run_id
-                    permutation_frame["scenario"] = scenario.name
-                    permutation_frame["model"] = model_name
-                    permutation_frame["permuted"] = True
-                    permutation_frame.to_parquet(
-                        prediction_dir / f"{permutation_run_id}.parquet", index=False
-                    )
+                        perm_model = build_probe_suite(features, case.task.kind, seed, budget)[
+                            model_name
+                        ]
+                        perm_started = time.perf_counter()
+                        perm_model.fit(features.iloc[train_indices], permuted_target)
+                        with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+                            if case.task.kind == "binary_classification":
+                                perm_prediction = perm_model.predict_proba(
+                                    features.iloc[test_indices]
+                                )[:, 1]
+                            else:
+                                perm_prediction = perm_model.predict(features.iloc[test_indices])
+                        records.append(
+                            _record(
+                                scenario.name,
+                                scenario.strategy,
+                                seed,
+                                model_name,
+                                True,
+                                time.perf_counter() - perm_started,
+                                len(train_indices),
+                                len(test_indices),
+                                compute_metrics(
+                                    target[test_indices],
+                                    np.asarray(perm_prediction),
+                                    case.task.kind,
+                                ),
+                                model_configuration=_model_configuration(perm_model),
+                                permutation_draw=draw,
+                            )
+                        )
+                        permutation_run_id = (
+                            f"{scenario.name}__{model_name}__permuted-{draw}__seed-{seed}"
+                        )
+                        permutation_frame = frame.iloc[test_indices].copy()
+                        permutation_frame["_row_id"] = test_indices
+                        permutation_frame["y_true"] = target[test_indices]
+                        permutation_frame["y_pred"] = perm_prediction
+                        permutation_frame["is_test"] = True
+                        permutation_frame["run_id"] = permutation_run_id
+                        permutation_frame["scenario"] = scenario.name
+                        permutation_frame["model"] = model_name
+                        permutation_frame["permuted"] = True
+                        permutation_frame["permutation_draw"] = draw
+                        permutation_frame.to_parquet(
+                            prediction_dir / f"{permutation_run_id}.parquet", index=False
+                        )
             if case.task.kind != "binary_classification" and len(case.entities) >= 2:
                 entity_columns = [entity.id_column for entity in case.entities.values()]
                 if all(column in frame for column in entity_columns[:2]):
@@ -305,6 +313,7 @@ def _record(
     metrics: dict[str, float | None],
     *,
     model_configuration: str,
+    permutation_draw: int | None = None,
 ) -> dict[str, Any]:
     return {
         "scenario": scenario,
@@ -316,6 +325,7 @@ def _record(
         "train_rows": train_rows,
         "test_rows": test_rows,
         "model_configuration": model_configuration,
+        "permutation_draw": permutation_draw,
     } | metrics
 
 

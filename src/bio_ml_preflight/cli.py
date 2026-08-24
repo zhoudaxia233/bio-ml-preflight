@@ -20,6 +20,7 @@ from bio_ml_preflight.contracts.case import (
     ThresholdSpec,
 )
 from bio_ml_preflight.data import read_table
+from bio_ml_preflight.data.bbb import load_bbb_martins
 from bio_ml_preflight.data.davis import load_davis
 from bio_ml_preflight.data.synthetic import SyntheticKind, generate_synthetic
 from bio_ml_preflight.discovery import discover_tasks
@@ -128,7 +129,7 @@ def demo_synthetic(
     output: Annotated[Path, typer.Option("--output", "-o")] = Path("reports/synthetic"),
 ) -> None:
     """Run all four deterministic scientific acceptance cases."""
-    root = Path(__file__).resolve().parents[2]
+    root = _project_root()
     data_dir = root / "examples" / "synthetic" / "data"
     for kind in ["stable", "leakage", "no_signal", "ranking_instability"]:
         data_path = data_dir / f"{kind}.parquet"
@@ -145,10 +146,24 @@ def demo_davis(
     output: Annotated[Path, typer.Option("--output", "-o")] = Path("reports/davis"),
 ) -> None:
     """Download/cache Davis through TDC and run pairwise scenarios."""
-    root = Path(__file__).resolve().parents[2]
+    root = _project_root()
     data_path = root / "data" / "cache" / "davis" / "davis.parquet"
     load_davis(data_path.parent)
     case = load_case(root / "examples" / "davis" / "case.yaml")
+    result = run_case(case, output, budget=budget)
+    typer.echo(_status_summary(result))
+
+
+@demo_app.command("bbb")
+def demo_bbb(
+    budget: Annotated[str, typer.Option("--budget")] = "smoke",
+    output: Annotated[Path, typer.Option("--output", "-o")] = Path("reports/bbb-martins"),
+) -> None:
+    """Download/cache BBB_Martins through TDC and run molecular classification scenarios."""
+    root = _project_root()
+    data_path = root / "data" / "cache" / "bbb_martins" / "bbb_martins.parquet"
+    load_bbb_martins(data_path.parent)
+    case = load_case(root / "examples" / "bbb_martins" / "case.yaml")
     result = run_case(case, output, budget=budget)
     typer.echo(_status_summary(result))
 
@@ -251,6 +266,15 @@ def _status_summary(result: dict[str, object]) -> str:
     return ", ".join(
         f"{row['claim_or_scenario']}={row['status']}" for row in rows if isinstance(row, dict)
     )
+
+
+def _project_root() -> Path:
+    current = Path.cwd().resolve()
+    candidates = [current, *current.parents, Path(__file__).resolve().parents[2]]
+    for candidate in candidates:
+        if (candidate / "pyproject.toml").is_file() and (candidate / "examples").is_dir():
+            return candidate
+    raise RuntimeError("Run demo commands from a bio-ml-preflight source checkout")
 
 
 if __name__ == "__main__":

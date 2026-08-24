@@ -27,6 +27,12 @@ uv sync --extra dev
 uv run bio-ml-preflight --help
 ```
 
+在会隐藏 editable `.pth` 的 macOS 环境中，最省事的入口是：
+
+```bash
+make demo
+```
+
 ## 跑合成数据 Demo
 
 一次运行四种情况：稳定信号、泄漏陷阱、无信号、排序不稳定。
@@ -53,6 +59,18 @@ uv run --python 3.11 bio-ml-preflight run examples/davis/case.yaml --budget stan
 ```
 
 下载的数据在 gitignored 的 `data/cache/`，不会提交到仓库。
+
+## 跑 BBB_Martins 分子二分类 Demo
+
+使用 SMILES 预测二分类 BBB 标签，并比较随机化合物与 scaffold 隔离验证：
+
+```bash
+uv run --python 3.11 --all-extras bio-ml-preflight demo bbb --budget smoke
+# 等价的一键命令：
+make demo-bbb
+```
+
+这里使用轻量字符特征，不训练 GNN；目的是先判断数据、切分和泛化边界。
 
 ## 分析自己的表格
 

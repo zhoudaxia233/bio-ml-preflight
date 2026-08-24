@@ -13,7 +13,7 @@ class StrictModel(BaseModel):
 
 
 class DataSpec(StrictModel):
-    adapter: Literal["tabular", "davis"] = "tabular"
+    adapter: Literal["tabular", "davis", "bbb_martins"] = "tabular"
     path: str
     fingerprint_columns: list[str] = Field(default_factory=list)
 
@@ -88,6 +88,7 @@ class EvaluationSpec(StrictModel):
     primary_metric: str = "spearman"
     secondary_metrics: list[str] = Field(default_factory=lambda: ["mae", "rmse"])
     bootstrap_unit: str | None = None
+    permutation_draws: int = Field(default=9, ge=1, le=100)
 
     @model_validator(mode="after")
     def seeds_are_unique(self) -> EvaluationSpec:
@@ -108,6 +109,7 @@ class ThresholdSpec(StrictModel):
     unstable_top_k: float = 0.5
     maximum_dispersion: float = 0.15
     minimum_permutation_delta: float = 0.05
+    maximum_permutation_p_value: float = Field(default=0.1, gt=0, le=1)
 
 
 class CaseSpec(StrictModel):

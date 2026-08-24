@@ -15,6 +15,11 @@ def test_synthetic_qualitative_findings(tmp_path: Path, kind: SyntheticKind) -> 
     statuses = {row["claim_or_scenario"]: row["status"] for row in result["capability_matrix"]}
     if kind == "stable":
         assert statuses["cold_target"] in {"SUPPORTED", "SUPPORTED_WITH_LIMITS"}
+        random_pair = next(
+            row for row in result["capability_matrix"] if row["claim_or_scenario"] == "random_pair"
+        )
+        assert random_pair["numbers"]["permutation_draws"] == 9
+        assert 0 < random_pair["numbers"]["permutation_p_value"] <= 1
     elif kind == "leakage":
         assert statuses["random_row"] in {"SUPPORTED", "SUPPORTED_WITH_LIMITS"}
         assert statuses["cold_entity"] == "CONTRADICTED"

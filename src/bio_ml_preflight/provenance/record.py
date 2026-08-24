@@ -52,7 +52,7 @@ def build_provenance(
         "cpu_count": os.cpu_count(),
         "holdout_description": (
             "pseudo-sealed public benchmark"
-            if case.data.adapter == "davis"
+            if case.data.adapter in {"davis", "bbb_martins"}
             else "locally governed holdout"
         ),
     }

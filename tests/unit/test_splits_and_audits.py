@@ -1,9 +1,9 @@
 import numpy as np
 import pandas as pd
 
-from bio_ml_preflight.audits import audit_overlap
+from bio_ml_preflight.audits import audit_dataset, audit_overlap
 from bio_ml_preflight.cli import synthetic_case
-from bio_ml_preflight.contracts.case import ScenarioSpec
+from bio_ml_preflight.contracts.case import EntitySpec, ScenarioSpec
 from bio_ml_preflight.data.synthetic import generate_synthetic
 from bio_ml_preflight.splits import create_split
 
@@ -30,3 +30,24 @@ def test_duplicate_overlap_is_detected(tmp_path) -> None:
     case.data.fingerprint_columns = ["sample_id", "x", "y"]
     result = audit_overlap(frame, np.array([0, 2]), np.array([1]), case)
     assert result["exact_duplicate_overlap"] == 1
+
+
+def test_entity_target_and_representation_conflicts_are_reported(tmp_path) -> None:
+    frame = pd.DataFrame(
+        {
+            "compound_id": ["a", "a", "b", "b"],
+            "smiles": ["CC", "CO", "CN", "CN"],
+            "y": [0, 1, 1, 1],
+        }
+    )
+    case = synthetic_case("no_signal", tmp_path / "unused.parquet")
+    case.task.target_column = "y"
+    case.entities = {
+        "compound": EntitySpec(id_column="compound_id", representation_column="smiles")
+    }
+
+    result = audit_dataset(frame, case)["independence"]
+    compound = result["entities"]["compound"]
+    assert compound["conflicting_target_entities"] == 1
+    assert compound["inconsistent_representation_entities"] == 1
+    assert len(result["warnings"]) == 3

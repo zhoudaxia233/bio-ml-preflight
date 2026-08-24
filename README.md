@@ -14,6 +14,12 @@ uv run bio-ml-preflight --help
 uv run bio-ml-preflight demo synthetic --budget smoke
 ```
 
+On macOS environments that hide editable `.pth` files, use the one-command checkout target instead:
+
+```bash
+make demo
+```
+
 Reports land under `reports/` and contain Markdown, HTML, JSON, figures, split manifests, per-run Parquet predictions, aggregate tables, a capability matrix, and provenance.
 
 For an existing table:
@@ -56,6 +62,18 @@ uv run bio-ml-preflight run examples/davis/case.yaml --budget standard
 ```
 
 The case compares random-pair, cold-drug, and cold-target splits. Davis is public, so any local “holdout” is pseudo-sealed, not truly blinded.
+
+## BBB_Martins molecular-classification demo
+
+This second TDC demo predicts a binary BBB label from SMILES and compares a random-compound diagnostic with scaffold-separated validation.
+
+```bash
+uv run --python 3.11 --all-extras bio-ml-preflight demo bbb --budget smoke
+# Equivalent one-command checkout target:
+make demo-bbb
+```
+
+It uses lightweight character features rather than a GNN. The purpose is to expose data and validation boundaries before spending on representation complexity.
 
 ## Constrained Autoprobe
 

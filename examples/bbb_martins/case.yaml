@@ -1,0 +1,60 @@
+schema_version: 1
+case_id: bbb-martins
+data:
+  adapter: bbb_martins
+  path: ../../data/cache/bbb_martins/bbb_martins.parquet
+  fingerprint_columns: [compound_id, smiles, bbb_label]
+task:
+  kind: binary_classification
+  prediction_unit: compound
+  target_column: bbb_label
+  higher_is_better: true
+entities:
+  compound:
+    id_column: compound_id
+    representation_column: smiles
+features:
+  include: [smiles]
+  exclude: []
+  post_outcome: []
+metadata:
+  replicate_id: null
+  biological_replicate_id: null
+  batch_id: null
+  plate_id: null
+  time_column: null
+  treatment_column: null
+  control_value: null
+decision:
+  kind: none
+  group_entity: null
+  k: [5, 10]
+generalization_scenarios:
+  - name: random_compound
+    strategy: group
+    group_column: compound_id
+  - name: scaffold_generalization
+    strategy: scaffold
+    group_column: smiles
+evaluation:
+  seeds: [11, 23, 47, 83, 131]
+  primary_metric: balanced_accuracy
+  secondary_metrics: [roc_auc, average_precision, log_loss]
+  bootstrap_unit: compound_id
+  permutation_draws: 9
+holdout:
+  enabled: false
+  maximum_accesses: 1
+thresholds:
+  supported_metric: 0.65
+  limited_metric: 0.55
+  stable_top_k: 0.65
+  unstable_top_k: 0.5
+  maximum_dispersion: 0.15
+  minimum_permutation_delta: 0.05
+  maximum_permutation_p_value: 0.1
+role_confirmation:
+  target: true
+  prediction_unit: true
+  features: true
+  entities: true

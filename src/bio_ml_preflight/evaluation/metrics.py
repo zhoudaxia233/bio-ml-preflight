@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any
 
 import numpy as np
@@ -94,6 +94,21 @@ def bootstrap_interval(
         "lower": float(np.nanquantile(estimates, alpha)),
         "upper": float(np.nanquantile(estimates, 1 - alpha)),
         "unit_count": float(len(groups)),
+    }
+
+
+def empirical_permutation_summary(
+    observed: float, null_values: Iterable[float]
+) -> dict[str, float | int | None]:
+    null = np.asarray(list(null_values), dtype=float)
+    null = null[np.isfinite(null)]
+    if not np.isfinite(observed) or not len(null):
+        return {"draws": int(len(null)), "median": None, "q95": None, "p_value": None}
+    return {
+        "draws": int(len(null)),
+        "median": float(np.median(null)),
+        "q95": float(np.quantile(null, 0.95)),
+        "p_value": float((1 + np.count_nonzero(null >= observed)) / (len(null) + 1)),
     }
 
 

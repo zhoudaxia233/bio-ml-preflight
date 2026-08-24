@@ -52,7 +52,8 @@ def audit_dataset(frame: pd.DataFrame, case: CaseSpec) -> dict[str, Any]:
             continue
         entity_columns.append(column)
         counts = frame[column].value_counts()
-        entities[name] = {
+        target_conflicts = frame.groupby(column, dropna=False)[target].nunique(dropna=True)
+        entity_result: dict[str, Any] = {
             "id_column": column,
             "unique": int(counts.size),
             "rows_per_entity": {
@@ -61,7 +62,23 @@ def audit_dataset(frame: pd.DataFrame, case: CaseSpec) -> dict[str, Any]:
                 "max": int(counts.max()),
             },
             "duplicate_identifier_rows": int(frame[column].duplicated(keep=False).sum()),
+            "conflicting_target_entities": int((target_conflicts > 1).sum()),
         }
+        representation = entity.representation_column
+        if representation and representation in frame:
+            representation_counts = frame.groupby(column, dropna=False)[representation].nunique(
+                dropna=True
+            )
+            entity_result["representation_column"] = representation
+            entity_result["inconsistent_representation_entities"] = int(
+                (representation_counts > 1).sum()
+            )
+        elif representation:
+            entity_result["representation_consistency"] = {
+                "status": "NOT_ASSESSABLE",
+                "reason": f"missing {representation}",
+            }
+        entities[name] = entity_result
     pair_columns = entity_columns[:2]
     pair: dict[str, Any] = {"status": "NOT_ASSESSABLE", "reason": "fewer than two entities"}
     if len(pair_columns) == 2:
@@ -104,6 +121,16 @@ def audit_dataset(frame: pd.DataFrame, case: CaseSpec) -> dict[str, Any]:
         independence_warnings.append(
             "Rows repeat declared entities; row bootstrap and random row splitting may "
             "overstate independence."
+        )
+    if any(result.get("conflicting_target_entities", 0) for result in entities.values()):
+        independence_warnings.append(
+            "Identical entity identifiers have conflicting targets; resolve label semantics "
+            "before confirmatory use."
+        )
+    if any(result.get("inconsistent_representation_entities", 0) for result in entities.values()):
+        independence_warnings.append(
+            "Identical entity identifiers map to inconsistent representations; verify entity "
+            "identity before confirmatory use."
         )
     if not case.evaluation.bootstrap_unit:
         independence_warnings.append("No bootstrap independent unit is configured.")

@@ -92,13 +92,14 @@ def morgan_fingerprints(
 
 def scaffold_groups(values: Iterable[object]) -> list[str]:
     try:
-        from rdkit import Chem
+        from rdkit import Chem, rdBase
         from rdkit.Chem.Scaffolds import MurckoScaffold
     except ImportError as error:
         raise RuntimeError("Scaffold splitting requires: uv sync --extra chem") from error
     murcko_smiles: Callable[..., str] = cast(Any, MurckoScaffold.MurckoScaffoldSmiles)
     groups = []
-    for value in values:
-        molecule = Chem.MolFromSmiles(str(value))
-        groups.append(murcko_smiles(mol=molecule) if molecule else "INVALID")
+    with rdBase.BlockLogs():
+        for value in values:
+            molecule = Chem.MolFromSmiles(str(value))
+            groups.append(murcko_smiles(mol=molecule) if molecule else "INVALID")
     return groups

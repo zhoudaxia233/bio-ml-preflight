@@ -62,6 +62,6 @@ follow_imports = "skip"
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
-addopts = "-q"
+addopts = '-q -m "not network"'
 testpaths = ["tests"]
 markers = ["network: requires a public dataset download"]

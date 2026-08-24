@@ -1,4 +1,7 @@
 .venv/
+/venv/
+/.uv-cache/
+/.matplotlib-cache/
 __pycache__/
 .pytest_cache/
 .mypy_cache/
@@ -10,3 +13,4 @@ reports/
 examples/synthetic/data/
 dist/
 *.pyc
+/Plan.md

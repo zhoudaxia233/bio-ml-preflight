@@ -54,7 +54,12 @@ def build_probe_suite(
     if task_kind == "binary_classification":
         models: dict[str, Any] = {
             "dummy": DummyClassifier(strategy="prior"),
-            "logistic": LogisticRegression(C=1.0, max_iter=1000, random_state=seed),
+            "logistic": LogisticRegression(
+                C=1.0,
+                max_iter=1000,
+                random_state=seed,
+                solver="liblinear",
+            ),
             "extra_trees": ExtraTreesClassifier(
                 n_estimators=80, min_samples_leaf=3, random_state=seed
             ),

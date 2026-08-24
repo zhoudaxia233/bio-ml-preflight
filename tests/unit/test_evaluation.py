@@ -1,7 +1,11 @@
 import numpy as np
 import pandas as pd
 
-from bio_ml_preflight.evaluation.metrics import bootstrap_interval, group_respecting_permutation
+from bio_ml_preflight.evaluation.metrics import (
+    bootstrap_interval,
+    empirical_permutation_summary,
+    group_respecting_permutation,
+)
 from bio_ml_preflight.stability.ranking import jaccard, ranking_stability
 
 
@@ -13,6 +17,13 @@ def test_group_permutation_preserves_equal_size_label_blocks() -> None:
     permuted_blocks = {tuple(sorted(permuted[groups == group])) for group in np.unique(groups)}
     assert permuted_blocks == original_blocks
     assert not np.array_equal(values, permuted)
+
+
+def test_empirical_permutation_summary_uses_upper_tail_with_correction() -> None:
+    result = empirical_permutation_summary(0.8, [-0.2, 0.1, 0.4, 0.9])
+    assert result["draws"] == 4
+    assert result["median"] == 0.25
+    assert result["p_value"] == 0.4
 
 
 def test_bootstrap_resamples_independent_units() -> None:
