@@ -70,20 +70,83 @@ a {
 .brand {
   display: inline-flex;
   align-items: center;
-  gap: 0.75rem;
-  font: 750 0.92rem/1 ui-monospace, SFMono-Regular, Menlo, monospace;
-  letter-spacing: -0.04em;
+  gap: 0.8rem;
 }
 
-.brand-mark {
-  display: grid;
-  place-items: center;
-  width: 34px;
+.brand-signal {
+  position: relative;
+  display: flex;
+  align-items: end;
+  gap: 3px;
+  width: 36px;
+  aspect-ratio: 1;
+  padding: 8px;
+  border: 1px solid rgba(242, 239, 231, 0.3);
+  background: linear-gradient(145deg, rgba(214, 255, 69, 0.08), transparent 55%);
+  transition:
+    border-color 160ms ease,
+    transform 160ms ease;
+}
+
+.brand-signal::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 4px;
   aspect-ratio: 1;
   border-radius: 50%;
   background: var(--lime);
-  color: var(--ink);
-  font-weight: 900;
+  box-shadow: 0 0 9px rgba(214, 255, 69, 0.8);
+}
+
+.brand-signal i {
+  width: 4px;
+  background: var(--lime);
+}
+
+.brand-signal i:first-child {
+  height: 7px;
+  opacity: 0.45;
+}
+
+.brand-signal i:nth-child(2) {
+  height: 13px;
+  opacity: 0.7;
+}
+
+.brand-signal i:last-child {
+  height: 19px;
+}
+
+.brand:hover .brand-signal {
+  transform: translateY(-1px) rotate(-2deg);
+  border-color: rgba(214, 255, 69, 0.75);
+}
+
+.brand-wordmark {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.brand-wordmark strong {
+  font-size: 1.08rem;
+  line-height: 0.82;
+  letter-spacing: -0.052em;
+  font-weight: 760;
+}
+
+.brand-wordmark strong span {
+  color: var(--lime);
+}
+
+.brand-wordmark small {
+  color: #777c73;
+  font-size: 0.51rem;
+  line-height: 1;
+  letter-spacing: 0.145em;
+  text-transform: uppercase;
+  font-weight: 800;
 }
 
 nav {
