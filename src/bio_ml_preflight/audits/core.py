@@ -62,9 +62,7 @@ def audit_dataset(frame: pd.DataFrame, case: CaseSpec) -> dict[str, Any]:
             },
             "duplicate_identifier_rows": int(frame[column].duplicated(keep=False).sum()),
         }
-        prediction_unit = case.task.prediction_unit.lower().replace("-", "_").replace(" ", "_")
-        entity_aliases = {name.lower(), entity.id_column.lower().removesuffix("_id")}
-        if len(case.entities) == 1 and prediction_unit in entity_aliases:
+        if _entity_defines_prediction_unit(case, name, entity.id_column):
             target_conflicts = frame.groupby(column, dropna=False)[target].nunique(dropna=True)
             entity_result["conflicting_target_entities"] = int((target_conflicts > 1).sum())
         representation = entity.representation_column
@@ -168,6 +166,129 @@ def audit_dataset(frame: pd.DataFrame, case: CaseSpec) -> dict[str, Any]:
         "measurement": replicates,
         "coverage": coverage,
         "missing_high_value_metadata": _missing_metadata(case),
+    }
+
+
+def apply_identity_conflict_policies(
+    frame: pd.DataFrame, case: CaseSpec
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Apply explicit entity-level policies before feature building or splitting."""
+    source = frame.copy()
+    resolved = frame.copy()
+    entity_results: dict[str, Any] = {}
+    kept_conflicts = False
+    changed = False
+    for name, entity in case.entities.items():
+        identifier = entity.id_column
+        if identifier not in source:
+            continue
+        target_conflicts: set[Any] = set()
+        if _entity_defines_prediction_unit(case, name, identifier):
+            target_counts = source.groupby(identifier, dropna=False)[
+                case.task.target_column
+            ].nunique(dropna=True)
+            target_conflicts = set(target_counts[target_counts > 1].index)
+        representation_conflicts: set[Any] = set()
+        representation = entity.representation_column
+        if representation and representation in source:
+            representation_counts = source.groupby(identifier, dropna=False)[
+                representation
+            ].nunique(dropna=True)
+            representation_conflicts = set(representation_counts[representation_counts > 1].index)
+        affected = target_conflicts | representation_conflicts
+        result = {
+            "policy": entity.identity_conflict_policy,
+            "conflicting_target_entities": len(target_conflicts),
+            "inconsistent_representation_entities": len(representation_conflicts),
+            "affected_entities": len(affected),
+        }
+        if not affected:
+            entity_results[name] = result
+            continue
+        policy = entity.identity_conflict_policy
+        if policy is None:
+            raise ValueError(
+                f"Entity {name!r} has {len(target_conflicts)} conflicting-target and "
+                f"{len(representation_conflicts)} inconsistent-representation identifiers; "
+                "set identity_conflict_policy to keep, exclude, or aggregate"
+            )
+        affected_mask = resolved[identifier].isin(affected)
+        before = len(resolved)
+        if policy == "keep":
+            kept_conflicts = True
+        elif policy == "exclude":
+            resolved = resolved.loc[~affected_mask].copy()
+            result["excluded_rows"] = before - len(resolved)
+            changed = True
+        else:
+            if representation_conflicts:
+                raise ValueError(
+                    f"Entity {name!r} cannot aggregate distinct values from "
+                    f"{representation!r}; choose keep or exclude"
+                )
+            resolved = _aggregate_conflicting_targets(resolved, case, identifier, affected_mask)
+            result["aggregated_rows"] = before - len(resolved)
+            changed = True
+        entity_results[name] = result
+    if resolved.empty:
+        raise ValueError("Identity-conflict policies removed every row")
+    status = "ACKNOWLEDGED" if kept_conflicts else "RESOLVED" if changed else "NO_CONFLICTS"
+    return resolved.reset_index(drop=True), {
+        "status": status,
+        "source_rows": len(source),
+        "model_rows": len(resolved),
+        "source_dataset_fingerprint": dataset_fingerprint(source, case.data.fingerprint_columns),
+        "entities": entity_results,
+    }
+
+
+def _aggregate_conflicting_targets(
+    frame: pd.DataFrame,
+    case: CaseSpec,
+    identifier: str,
+    affected_mask: pd.Series,
+) -> pd.DataFrame:
+    affected = frame.loc[affected_mask]
+    if not case.features.include:
+        raise ValueError("Aggregate policy requires an explicit features.include list")
+    feature_columns = [
+        column
+        for column in case.features.include
+        if column in frame and column != case.task.target_column
+    ]
+    for column in feature_columns:
+        counts = affected.groupby(identifier, dropna=False)[column].nunique(dropna=False)
+        if (counts > 1).any():
+            raise ValueError(
+                f"Cannot aggregate {identifier!r}: modeled feature {column!r} varies within "
+                "an identifier"
+            )
+    result = frame.copy()
+    drop_indices: list[Any] = []
+    target = case.task.target_column
+    for indices in affected.groupby(identifier, dropna=False, sort=False).groups.values():
+        positions = list(indices)
+        values = frame.loc[positions, target]
+        if case.task.kind == "binary_classification":
+            counts = values.value_counts()
+            if len(counts) > 1 and counts.iloc[0] == counts.iloc[1]:
+                raise ValueError(
+                    f"Cannot aggregate tied binary labels for {identifier!r}; choose keep or "
+                    "exclude"
+                )
+            aggregate = counts.index[0]
+        else:
+            aggregate = float(pd.to_numeric(values, errors="raise").mean())
+        result.loc[positions[0], target] = aggregate
+        drop_indices.extend(positions[1:])
+    return result.drop(index=drop_indices)
+
+
+def _entity_defines_prediction_unit(case: CaseSpec, name: str, identifier: str) -> bool:
+    prediction_unit = case.task.prediction_unit.lower().replace("-", "_").replace(" ", "_")
+    return len(case.entities) == 1 and prediction_unit in {
+        name.lower(),
+        identifier.lower().removesuffix("_id"),
     }
 
 

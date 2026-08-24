@@ -1,10 +1,16 @@
 import numpy as np
 import pandas as pd
+import pytest
 
-from bio_ml_preflight.audits import audit_dataset, audit_overlap
+from bio_ml_preflight.audits import (
+    apply_identity_conflict_policies,
+    audit_dataset,
+    audit_overlap,
+)
 from bio_ml_preflight.cli import synthetic_case
 from bio_ml_preflight.contracts.case import EntitySpec, ScenarioSpec
 from bio_ml_preflight.data.synthetic import generate_synthetic
+from bio_ml_preflight.runner import run_case
 from bio_ml_preflight.splits import create_split
 
 
@@ -87,3 +93,104 @@ def test_pairwise_target_variation_is_not_an_entity_label_conflict(tmp_path) -> 
     assert "conflicting_target_entities" not in result["entities"]["compound"]
     assert "conflicting_target_entities" not in result["entities"]["target"]
     assert result["pair_structure"]["conflicting_label_pairs"] == 0
+
+
+def test_identity_conflicts_require_an_explicit_policy(tmp_path) -> None:
+    frame = pd.DataFrame(
+        {"compound_id": ["a", "a", "b"], "smiles": ["CC", "CO", "CN"], "y": [0, 1, 1]}
+    )
+    case = synthetic_case("no_signal", tmp_path / "unused.parquet")
+    case.task.target_column = "y"
+    case.task.prediction_unit = "compound"
+    case.features.include = ["smiles"]
+    case.entities = {
+        "compound": EntitySpec(id_column="compound_id", representation_column="smiles")
+    }
+
+    with pytest.raises(ValueError, match="identity_conflict_policy"):
+        apply_identity_conflict_policies(frame, case)
+
+
+def test_exclude_policy_removes_every_conflicting_identity(tmp_path) -> None:
+    frame = pd.DataFrame(
+        {
+            "compound_id": ["a", "a", "b", "b", "c"],
+            "smiles": ["CC", "CO", "CN", "CN", "CF"],
+            "y": [0, 0, 0, 1, 1],
+        }
+    )
+    case = synthetic_case("no_signal", tmp_path / "unused.parquet")
+    case.task.target_column = "y"
+    case.task.prediction_unit = "compound"
+    case.entities = {
+        "compound": EntitySpec(
+            id_column="compound_id",
+            representation_column="smiles",
+            identity_conflict_policy="exclude",
+        )
+    }
+
+    resolved, result = apply_identity_conflict_policies(frame, case)
+    assert resolved["compound_id"].tolist() == ["c"]
+    assert result["status"] == "RESOLVED"
+    assert result["entities"]["compound"] == {
+        "policy": "exclude",
+        "conflicting_target_entities": 1,
+        "inconsistent_representation_entities": 1,
+        "affected_entities": 2,
+        "excluded_rows": 4,
+    }
+
+
+def test_aggregate_policy_averages_regression_targets(tmp_path) -> None:
+    frame = pd.DataFrame(
+        {"compound_id": ["a", "a", "b"], "smiles": ["CC", "CC", "CN"], "y": [1.0, 3.0, 4.0]}
+    )
+    case = synthetic_case("no_signal", tmp_path / "unused.parquet")
+    case.task.target_column = "y"
+    case.task.prediction_unit = "compound"
+    case.features.include = ["smiles"]
+    case.entities = {
+        "compound": EntitySpec(
+            id_column="compound_id",
+            representation_column="smiles",
+            identity_conflict_policy="aggregate",
+        )
+    }
+
+    resolved, result = apply_identity_conflict_policies(frame, case)
+    assert resolved.to_dict("records") == [
+        {"compound_id": "a", "smiles": "CC", "y": 2.0},
+        {"compound_id": "b", "smiles": "CN", "y": 4.0},
+    ]
+    assert result["entities"]["compound"]["aggregated_rows"] == 1
+
+
+def test_grouping_by_representation_cannot_split_one_identity_across_folds(tmp_path) -> None:
+    frame = pd.DataFrame(
+        {
+            "compound_id": ["a", "a", "b", "c", "d"],
+            "smiles": ["CC", "CCC", "CO", "CN", "CF"],
+            "y": [0, 0, 1, 0, 1],
+        }
+    )
+    path = tmp_path / "compounds.parquet"
+    frame.to_parquet(path)
+    case = synthetic_case("no_signal", path)
+    case.task.kind = "binary_classification"
+    case.task.prediction_unit = "compound"
+    case.features.include = ["smiles"]
+    case.entities = {
+        "compound": EntitySpec(
+            id_column="compound_id",
+            representation_column="smiles",
+            identity_conflict_policy="keep",
+        )
+    }
+    case.generalization_scenarios = [
+        ScenarioSpec(name="heldout", strategy="group", group_column="smiles")
+    ]
+    case.evaluation.seeds = [23]
+
+    with pytest.raises(ValueError, match="identifiers cross train and test"):
+        run_case(case, tmp_path / "report", model_allowlist={"dummy"})

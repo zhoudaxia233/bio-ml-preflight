@@ -9,7 +9,11 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
-from bio_ml_preflight.audits import audit_dataset, audit_overlap
+from bio_ml_preflight.audits import (
+    apply_identity_conflict_policies,
+    audit_dataset,
+    audit_overlap,
+)
 from bio_ml_preflight.contracts import CaseSpec
 from bio_ml_preflight.contracts.case import ScenarioSpec
 from bio_ml_preflight.data import read_table
@@ -19,7 +23,7 @@ from bio_ml_preflight.evaluation.metrics import (
     group_respecting_permutation,
     per_group_ranking_metrics,
 )
-from bio_ml_preflight.features import build_feature_frame
+from bio_ml_preflight.features import build_feature_frames
 from bio_ml_preflight.models.probes import build_probe_suite, entity_mean_predictions
 from bio_ml_preflight.provenance import build_provenance
 from bio_ml_preflight.reporting import write_report
@@ -37,8 +41,11 @@ def run_case(
     started = time.perf_counter()
     frame = read_table(Path(case.data.path)).reset_index(drop=True)
     _validate_columns(frame, case)
+    frame, identity_consistency = apply_identity_conflict_policies(frame, case)
+    _validate_columns(frame, case)
     audits = audit_dataset(frame, case)
-    features = build_feature_frame(frame, case)
+    audits["identity_consistency"] = identity_consistency
+    feature_frames = build_feature_frames(frame, case)
     target = frame[case.task.target_column].to_numpy()
     output.mkdir(parents=True, exist_ok=True)
     prediction_dir = output / "predictions"
@@ -55,124 +62,154 @@ def run_case(
         for seed in seeds:
             manifest = create_split(frame, scenario, seed)
             manifest_path = manifest_dir / f"{scenario.name}__seed-{seed}.json"
-            manifest.save(manifest_path)
-            split_hashes[f"{scenario.name}:{seed}"] = manifest.fingerprint()
             train_indices = np.asarray(manifest.train_indices)
             test_indices = np.asarray(manifest.test_indices)
-            overlap_results[f"{scenario.name}:{seed}"] = audit_overlap(
-                frame, train_indices, test_indices, case
-            )
-            suite = build_probe_suite(features, case.task.kind, seed, budget)
-            if model_allowlist is not None:
-                suite = {name: model for name, model in suite.items() if name in model_allowlist}
-            for model_name, model in suite.items():
-                run_id = f"{scenario.name}__{model_name}__seed-{seed}"
-                fit_started = time.perf_counter()
-                model.fit(features.iloc[train_indices], target[train_indices])
-                with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
-                    if case.task.kind == "binary_classification":
-                        y_test = model.predict_proba(features.iloc[test_indices])[:, 1]
-                        y_all = model.predict_proba(features)[:, 1]
-                    else:
-                        y_test = model.predict(features.iloc[test_indices])
-                        y_all = model.predict(features)
-                runtime = time.perf_counter() - fit_started
-                metrics = compute_metrics(target[test_indices], np.asarray(y_test), case.task.kind)
-                record = _record(
-                    scenario.name,
-                    scenario.strategy,
-                    seed,
-                    model_name,
-                    False,
-                    runtime,
-                    len(train_indices),
-                    len(test_indices),
-                    metrics,
-                    model_configuration=_model_configuration(model),
-                )
-                group_column = _ranking_group_column(case)
-                if group_column and group_column in frame:
-                    ranking_direction = 1.0 if case.task.higher_is_better else -1.0
-                    test_prediction = pd.DataFrame(
-                        {
-                            group_column: frame.iloc[test_indices][group_column].to_numpy(),
-                            "y_true": ranking_direction * target[test_indices],
-                            "y_pred": ranking_direction * y_test,
-                        }
+            overlap = audit_overlap(frame, train_indices, test_indices, case)
+            _validate_protected_entity_isolation(case, scenario, overlap)
+            manifest.save(manifest_path)
+            split_hashes[f"{scenario.name}:{seed}"] = manifest.fingerprint()
+            overlap_results[f"{scenario.name}:{seed}"] = overlap
+            for representation, features in feature_frames.items():
+                suite = build_probe_suite(features, case.task.kind, seed, budget)
+                if model_allowlist is not None:
+                    suite = {
+                        name: model for name, model in suite.items() if name in model_allowlist
+                    }
+                for model_name, model in suite.items():
+                    run_id = f"{scenario.name}__{representation}__{model_name}__seed-{seed}"
+                    fit_started = time.perf_counter()
+                    model.fit(features.iloc[train_indices], target[train_indices])
+                    with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+                        if case.task.kind == "binary_classification":
+                            y_test = model.predict_proba(features.iloc[test_indices])[:, 1]
+                            y_all = model.predict_proba(features)[:, 1]
+                        else:
+                            y_test = model.predict(features.iloc[test_indices])
+                            y_all = model.predict(features)
+                    runtime = time.perf_counter() - fit_started
+                    metrics = compute_metrics(
+                        target[test_indices], np.asarray(y_test), case.task.kind
                     )
-                    record.update(
-                        per_group_ranking_metrics(
-                            test_prediction,
-                            group_column=group_column,
-                            k=min(case.decision.k),
-                        )
+                    record = _record(
+                        scenario.name,
+                        scenario.strategy,
+                        seed,
+                        model_name,
+                        False,
+                        runtime,
+                        len(train_indices),
+                        len(test_indices),
+                        metrics,
+                        representation=representation,
+                        model_configuration=_model_configuration(model),
                     )
-                records.append(record)
-                prediction = _prediction_frame(
-                    frame,
-                    target,
-                    np.asarray(y_all),
-                    test_indices,
-                    run_id,
-                    scenario.name,
-                    model_name,
-                )
-                prediction.to_parquet(prediction_dir / f"{run_id}.parquet", index=False)
-                if model_name != "dummy":
-                    ranking_predictions.append(prediction)
-                    groups = _permutation_groups(frame.iloc[train_indices], case)
-                    for draw in range(case.evaluation.permutation_draws):
-                        permutation_seed = seed + 10_000 + 1_000 * draw
-                        permuted_target = group_respecting_permutation(
-                            target[train_indices], groups, permutation_seed
+                    group_column = _ranking_group_column(case)
+                    if group_column and group_column in frame:
+                        ranking_direction = 1.0 if case.task.higher_is_better else -1.0
+                        test_prediction = pd.DataFrame(
+                            {
+                                group_column: frame.iloc[test_indices][group_column].to_numpy(),
+                                "y_true": ranking_direction * target[test_indices],
+                                "y_pred": ranking_direction * y_test,
+                            }
                         )
-                        perm_model = build_probe_suite(features, case.task.kind, seed, budget)[
-                            model_name
-                        ]
-                        perm_started = time.perf_counter()
-                        perm_model.fit(features.iloc[train_indices], permuted_target)
-                        with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
-                            if case.task.kind == "binary_classification":
-                                perm_prediction = perm_model.predict_proba(
-                                    features.iloc[test_indices]
-                                )[:, 1]
-                            else:
-                                perm_prediction = perm_model.predict(features.iloc[test_indices])
-                        records.append(
-                            _record(
-                                scenario.name,
-                                scenario.strategy,
-                                seed,
-                                model_name,
-                                True,
-                                time.perf_counter() - perm_started,
-                                len(train_indices),
-                                len(test_indices),
-                                compute_metrics(
-                                    target[test_indices],
-                                    np.asarray(perm_prediction),
-                                    case.task.kind,
-                                ),
-                                model_configuration=_model_configuration(perm_model),
-                                permutation_draw=draw,
+                        record.update(
+                            per_group_ranking_metrics(
+                                test_prediction,
+                                group_column=group_column,
+                                k=min(case.decision.k),
                             )
                         )
-                        permutation_run_id = (
-                            f"{scenario.name}__{model_name}__permuted-{draw}__seed-{seed}"
+                    records.append(record)
+                    prediction = _prediction_frame(
+                        frame,
+                        target,
+                        np.asarray(y_all),
+                        test_indices,
+                        run_id,
+                        scenario.name,
+                        model_name,
+                        representation,
+                    )
+                    prediction.to_parquet(prediction_dir / f"{run_id}.parquet", index=False)
+                    if model_name != "dummy":
+                        ranking_predictions.append(prediction)
+                        groups = _permutation_groups(frame.iloc[train_indices], case)
+                        for draw in range(case.evaluation.permutation_draws):
+                            permutation_seed = seed + 10_000 + 1_000 * draw
+                            permuted_target = group_respecting_permutation(
+                                target[train_indices], groups, permutation_seed
+                            )
+                            perm_model = build_probe_suite(features, case.task.kind, seed, budget)[
+                                model_name
+                            ]
+                            perm_started = time.perf_counter()
+                            perm_model.fit(features.iloc[train_indices], permuted_target)
+                            with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+                                if case.task.kind == "binary_classification":
+                                    perm_prediction = perm_model.predict_proba(
+                                        features.iloc[test_indices]
+                                    )[:, 1]
+                                else:
+                                    perm_prediction = perm_model.predict(
+                                        features.iloc[test_indices]
+                                    )
+                            records.append(
+                                _record(
+                                    scenario.name,
+                                    scenario.strategy,
+                                    seed,
+                                    model_name,
+                                    True,
+                                    time.perf_counter() - perm_started,
+                                    len(train_indices),
+                                    len(test_indices),
+                                    compute_metrics(
+                                        target[test_indices],
+                                        np.asarray(perm_prediction),
+                                        case.task.kind,
+                                    ),
+                                    representation=representation,
+                                    model_configuration=_model_configuration(perm_model),
+                                    permutation_draw=draw,
+                                )
+                            )
+                            permutation_run_id = (
+                                f"{scenario.name}__{representation}__{model_name}__"
+                                f"permuted-{draw}__seed-{seed}"
+                            )
+                            permutation_frame = frame.iloc[test_indices].copy()
+                            permutation_frame["_row_id"] = test_indices
+                            permutation_frame["y_true"] = target[test_indices]
+                            permutation_frame["y_pred"] = perm_prediction
+                            permutation_frame["is_test"] = True
+                            permutation_frame["run_id"] = permutation_run_id
+                            permutation_frame["scenario"] = scenario.name
+                            permutation_frame["model"] = model_name
+                            permutation_frame["representation"] = representation
+                            permutation_frame["permuted"] = True
+                            permutation_frame["permutation_draw"] = draw
+                            permutation_frame.to_parquet(
+                                prediction_dir / f"{permutation_run_id}.parquet", index=False
+                            )
+                group_for_curve = _scenario_group_column(scenario)
+                if seed == seeds[0] and group_for_curve and group_for_curve in frame:
+                    learning_records.extend(
+                        _learning_curve(
+                            frame,
+                            features,
+                            target,
+                            train_indices,
+                            test_indices,
+                            group_for_curve,
+                            scenario.name,
+                            representation,
+                            case,
+                            budget,
+                            seed,
+                            model_allowlist,
                         )
-                        permutation_frame = frame.iloc[test_indices].copy()
-                        permutation_frame["_row_id"] = test_indices
-                        permutation_frame["y_true"] = target[test_indices]
-                        permutation_frame["y_pred"] = perm_prediction
-                        permutation_frame["is_test"] = True
-                        permutation_frame["run_id"] = permutation_run_id
-                        permutation_frame["scenario"] = scenario.name
-                        permutation_frame["model"] = model_name
-                        permutation_frame["permuted"] = True
-                        permutation_frame["permutation_draw"] = draw
-                        permutation_frame.to_parquet(
-                            prediction_dir / f"{permutation_run_id}.parquet", index=False
-                        )
+                    )
             if case.task.kind != "binary_classification" and len(case.entities) >= 2:
                 entity_columns = [entity.id_column for entity in case.entities.values()]
                 if all(column in frame for column in entity_columns[:2]):
@@ -199,6 +236,7 @@ def run_case(
                                 len(train_indices),
                                 len(test_indices),
                                 metrics,
+                                representation="not_applicable",
                                 model_configuration=json.dumps(
                                     {"type": model_name}, sort_keys=True
                                 ),
@@ -212,29 +250,14 @@ def run_case(
                         baseline_frame["run_id"] = run_id
                         baseline_frame["scenario"] = scenario.name
                         baseline_frame["model"] = model_name
+                        baseline_frame["representation"] = "not_applicable"
                         baseline_frame.to_parquet(prediction_dir / f"{run_id}.parquet", index=False)
-            group_for_curve = _scenario_group_column(scenario)
-            if seed == seeds[0] and group_for_curve and group_for_curve in frame:
-                learning_records.extend(
-                    _learning_curve(
-                        frame,
-                        features,
-                        target,
-                        train_indices,
-                        test_indices,
-                        group_for_curve,
-                        scenario.name,
-                        case,
-                        budget,
-                        seed,
-                        model_allowlist,
-                    )
-                )
     experiments = pd.DataFrame(records)
     learning_curve = pd.DataFrame(
         learning_records,
         columns=[
             "scenario",
+            "representation",
             "model",
             "independent_group",
             "group_count",
@@ -246,26 +269,15 @@ def run_case(
     ranking_input = (
         pd.concat(ranking_predictions, ignore_index=True) if ranking_predictions else pd.DataFrame()
     )
-    group_column = _ranking_group_column(case)
-    candidate_column = _ranking_candidate_column(frame, case, group_column)
-    if group_column and candidate_column:
-        ranking, ranking_table = ranking_stability(
-            ranking_input,
-            group_column=group_column,
-            candidate_column=candidate_column,
-            k_values=case.decision.k,
-            higher_is_better=case.task.higher_is_better,
-        )
-    else:
-        ranking, ranking_table = (
-            {"status": "NOT_ASSESSABLE", "reason": "No grouped decision was declared."},
-            pd.DataFrame(),
-        )
+    ranking, ranking_table, rankings_by_representation = _ranking_results(
+        ranking_input, frame, case, list(feature_frames)
+    )
     decomposition = stability_decomposition(experiments, case.evaluation.primary_metric)
-    capability = capability_matrix(
+    capability = _capabilities_by_representation(
         experiments,
         case,
-        ranking,
+        rankings_by_representation,
+        list(feature_frames),
         audits=audits,
         overlap_results=overlap_results,
     )
@@ -276,6 +288,9 @@ def run_case(
             verdict["evidence_against"].append(f"Unconfirmed case roles: {unconfirmed}.")
             verdict["unmet_assumptions"].append("A researcher must confirm provisional roles.")
             verdict["cheapest_next_evidence"] = "Review and confirm the provisional case roles."
+    representation_sensitivity = _representation_sensitivity(
+        capability, experiments, case.evaluation.primary_metric
+    )
     provenance = build_provenance(
         case,
         dataset_fingerprint=audits["inventory"]["dataset_fingerprint"],
@@ -291,6 +306,7 @@ def run_case(
         "learning_curve": learning_records,
         "stability_decomposition": decomposition,
         "ranking_stability": ranking,
+        "representation_sensitivity": representation_sensitivity,
         "capability_matrix": capability,
         "provenance": provenance,
     }
@@ -307,6 +323,146 @@ def run_case(
     return cast(dict[str, Any], _json_safe(structured))
 
 
+def _ranking_results(
+    predictions: pd.DataFrame,
+    frame: pd.DataFrame,
+    case: CaseSpec,
+    representations: list[str],
+) -> tuple[dict[str, Any], pd.DataFrame, dict[str, dict[str, Any]]]:
+    group_column = _ranking_group_column(case)
+    candidate_column = _ranking_candidate_column(frame, case, group_column)
+    if not group_column or not candidate_column:
+        unavailable = {
+            representation: {
+                "status": "NOT_ASSESSABLE",
+                "reason": "No grouped decision was declared.",
+            }
+            for representation in representations
+        }
+        return (
+            {
+                "status": "NOT_ASSESSABLE",
+                "reason": "No grouped decision was declared.",
+                "by_representation": unavailable,
+            },
+            pd.DataFrame(),
+            unavailable,
+        )
+    by_representation: dict[str, dict[str, Any]] = {}
+    tables = []
+    for representation in representations:
+        subset = (
+            predictions[predictions["representation"].eq(representation)]
+            if "representation" in predictions
+            else pd.DataFrame()
+        )
+        summary, table = ranking_stability(
+            subset,
+            group_column=group_column,
+            candidate_column=candidate_column,
+            k_values=case.decision.k,
+            higher_is_better=case.task.higher_is_better,
+        )
+        by_representation[representation] = summary
+        if not table.empty:
+            table.insert(0, "representation", representation)
+            tables.append(table)
+    overall, _ = ranking_stability(
+        predictions,
+        group_column=group_column,
+        candidate_column=candidate_column,
+        k_values=case.decision.k,
+        higher_is_better=case.task.higher_is_better,
+    )
+    overall["by_representation"] = by_representation
+    ranking_table = pd.concat(tables, ignore_index=True) if tables else pd.DataFrame()
+    return overall, ranking_table, by_representation
+
+
+def _capabilities_by_representation(
+    experiments: pd.DataFrame,
+    case: CaseSpec,
+    rankings: dict[str, dict[str, Any]],
+    representations: list[str],
+    *,
+    audits: dict[str, Any],
+    overlap_results: dict[str, Any],
+) -> list[dict[str, Any]]:
+    scenario_claims = {scenario.name for scenario in case.generalization_scenarios}
+    if case.decision.kind == "top_k_per_group":
+        scenario_claims.add(
+            f"top-{min(case.decision.k)} selection within {case.decision.group_entity}"
+        )
+    represented: list[dict[str, Any]] = []
+    shared: list[dict[str, Any]] = []
+    for index, representation in enumerate(representations):
+        matrix = capability_matrix(
+            experiments[experiments["representation"].eq(representation)],
+            case,
+            rankings[representation],
+            audits=audits,
+            overlap_results=overlap_results,
+        )
+        for verdict in matrix:
+            if verdict["claim_or_scenario"] in scenario_claims:
+                verdict["representation"] = representation
+                represented.append(verdict)
+            elif index == 0:
+                shared.append(verdict)
+    return [*represented, *shared]
+
+
+def _representation_sensitivity(
+    capability: list[dict[str, Any]], experiments: pd.DataFrame, primary_metric: str
+) -> list[dict[str, Any]]:
+    claims: dict[str, list[dict[str, Any]]] = {}
+    for verdict in capability:
+        if "representation" in verdict:
+            claims.setdefault(str(verdict["claim_or_scenario"]), []).append(verdict)
+    status_order = {
+        "NOT_ASSESSABLE": 0,
+        "CONTRADICTED": 1,
+        "INSUFFICIENT_EVIDENCE": 2,
+        "SUPPORTED_WITH_LIMITS": 3,
+        "SUPPORTED": 4,
+    }
+    rows = []
+    real = experiments[experiments["model"].ne("dummy") & experiments["permuted"].eq(False)]
+    for claim, verdicts in claims.items():
+        statuses = {row["representation"]: row["status"] for row in verdicts}
+        medians = {row["representation"]: row["numbers"].get("median") for row in verdicts}
+        best_models = {row["representation"]: row["numbers"].get("best_model") for row in verdicts}
+        finite = [float(value) for value in medians.values() if value is not None]
+        scenario = real[real["scenario"].eq(claim)]
+        matched_models: dict[str, dict[str, float]] = {}
+        matched_ranges = []
+        for model, model_rows in scenario.groupby("model"):
+            model_medians = {
+                str(representation): float(values.median())
+                for representation, values in model_rows.groupby("representation")[primary_metric]
+                if values.notna().any()
+            }
+            if set(model_medians) == set(statuses):
+                matched_models[str(model)] = model_medians
+                matched_ranges.append(max(model_medians.values()) - min(model_medians.values()))
+        rows.append(
+            {
+                "claim_or_scenario": claim,
+                "status_by_representation": statuses,
+                "median_by_representation": medians,
+                "best_model_by_representation": best_models,
+                "matched_model_medians": matched_models,
+                "verdict_changes": len(set(statuses.values())) > 1,
+                "capability_median_range": max(finite) - min(finite) if finite else None,
+                "maximum_matched_model_range": max(matched_ranges) if matched_ranges else None,
+                "conservative_status": min(
+                    statuses.values(), key=lambda status: status_order.get(status, -1)
+                ),
+            }
+        )
+    return rows
+
+
 def _record(
     scenario: str,
     strategy: str,
@@ -318,12 +474,14 @@ def _record(
     test_rows: int,
     metrics: dict[str, float | None],
     *,
+    representation: str,
     model_configuration: str,
     permutation_draw: int | None = None,
 ) -> dict[str, Any]:
     return {
         "scenario": scenario,
         "strategy": strategy,
+        "representation": representation,
         "seed": seed,
         "model": model,
         "permuted": permuted,
@@ -353,6 +511,7 @@ def _prediction_frame(
     run_id: str,
     scenario: str,
     model: str,
+    representation: str,
 ) -> pd.DataFrame:
     result = frame.copy()
     result["_row_id"] = np.arange(len(frame))
@@ -363,6 +522,7 @@ def _prediction_frame(
     result["run_id"] = run_id
     result["scenario"] = scenario
     result["model"] = model
+    result["representation"] = representation
     return result
 
 
@@ -398,6 +558,7 @@ def _learning_curve(
     test_indices: npt.NDArray[np.int64],
     group_column: str,
     scenario: str,
+    representation: str,
     case: CaseSpec,
     budget: str,
     seed: int,
@@ -433,6 +594,7 @@ def _learning_curve(
         rows.append(
             {
                 "scenario": scenario,
+                "representation": representation,
                 "model": model_name,
                 "independent_group": group_column,
                 "group_count": int(group_count),
@@ -469,15 +631,33 @@ def _validate_columns(frame: pd.DataFrame, case: CaseSpec) -> None:
         )
 
 
+def _validate_protected_entity_isolation(
+    case: CaseSpec, scenario: ScenarioSpec, overlap: dict[str, Any]
+) -> None:
+    if scenario.strategy not in {"group", "scaffold"}:
+        return
+    grouping_column = scenario.group_column
+    for name, entity in case.entities.items():
+        if grouping_column not in {entity.id_column, entity.representation_column}:
+            continue
+        count = overlap["entity_overlap"].get(name, {}).get("count", 0)
+        if count:
+            raise ValueError(
+                f"Scenario {scenario.name!r} cannot provide held-out {name} evidence: "
+                f"{count} identifiers cross train and test; resolve identity conflicts first"
+            )
+
+
 def _experiment_summary(experiments: pd.DataFrame, primary: str) -> list[dict[str, Any]]:
     result = []
-    for (scenario, model, permuted), group in experiments.groupby(
-        ["scenario", "model", "permuted"]
+    for (scenario, representation, model, permuted), group in experiments.groupby(
+        ["scenario", "representation", "model", "permuted"]
     ):
         values = group[primary].dropna()
         result.append(
             {
                 "scenario": scenario,
+                "representation": representation,
                 "model": model,
                 "permuted": bool(permuted),
                 "median": float(values.median()) if len(values) else None,

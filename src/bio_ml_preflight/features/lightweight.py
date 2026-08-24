@@ -38,7 +38,29 @@ def amino_acid_composition(values: Iterable[object], *, prefix: str) -> pd.DataF
     return pd.DataFrame(rows, columns=[f"{prefix}_aa_{value}" for value in alphabet])
 
 
-def build_feature_frame(frame: pd.DataFrame, case: CaseSpec) -> pd.DataFrame:
+def build_feature_frames(frame: pd.DataFrame, case: CaseSpec) -> dict[str, pd.DataFrame]:
+    representations: list[str] = []
+    representations.extend(case.features.molecular_representations)
+    if not representations:
+        representations.append("declared_features")
+    return {
+        representation: build_feature_frame(
+            frame,
+            case,
+            molecular_representation=(
+                None if representation == "declared_features" else representation
+            ),
+        )
+        for representation in representations
+    }
+
+
+def build_feature_frame(
+    frame: pd.DataFrame,
+    case: CaseSpec,
+    *,
+    molecular_representation: str | None = None,
+) -> pd.DataFrame:
     if case.features.include:
         missing = sorted(set(case.features.include) - set(frame.columns))
         if missing:
@@ -62,7 +84,13 @@ def build_feature_frame(frame: pd.DataFrame, case: CaseSpec) -> pd.DataFrame:
         if entity.representation_column in features.columns
     }
     for column in sorted(value for value in representations if value is not None):
-        if "seq" in column.lower() or "protein" in column.lower() or "target" in column.lower():
+        if column == case.features.smiles_column and molecular_representation == "morgan":
+            values = morgan_fingerprints(features[column])
+            encoded = pd.DataFrame(
+                values,
+                columns=[f"{column}_morgan_{index}" for index in range(values.shape[1])],
+            )
+        elif "seq" in column.lower() or "protein" in column.lower() or "target" in column.lower():
             encoded = amino_acid_composition(features[column], prefix=column)
         else:
             encoded = hashed_character_features(features[column], prefix=column)
@@ -74,19 +102,20 @@ def morgan_fingerprints(
     values: Iterable[object], *, radius: int = 2, n_bits: int = 1024
 ) -> npt.NDArray[np.uint8]:
     try:
-        from rdkit import Chem
+        from rdkit import Chem, rdBase
         from rdkit.Chem import rdFingerprintGenerator
     except ImportError as error:
         raise RuntimeError("Morgan fingerprints require: uv sync --extra chem") from error
     rows: list[npt.NDArray[np.uint8]] = []
     generator = rdFingerprintGenerator.GetMorganGenerator(radius=radius, fpSize=n_bits)
-    for value in values:
-        molecule = Chem.MolFromSmiles(str(value))
-        if molecule is None:
-            rows.append(np.zeros(n_bits, dtype=np.uint8))
-            continue
-        fingerprint = generator.GetFingerprint(molecule)
-        rows.append(np.asarray(fingerprint, dtype=np.uint8))
+    with rdBase.BlockLogs():
+        for value in values:
+            molecule = Chem.MolFromSmiles(str(value))
+            if molecule is None:
+                rows.append(np.zeros(n_bits, dtype=np.uint8))
+                continue
+            fingerprint = generator.GetFingerprint(molecule)
+            rows.append(np.asarray(fingerprint, dtype=np.uint8))
     return cast(npt.NDArray[np.uint8], np.vstack(rows))
 
 

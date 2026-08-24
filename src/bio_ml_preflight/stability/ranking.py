@@ -87,7 +87,11 @@ def ranking_stability(
 
 
 def stability_decomposition(experiments: pd.DataFrame, primary_metric: str) -> dict[str, Any]:
-    usable = experiments[experiments["model"].ne("dummy") & experiments[primary_metric].notna()]
+    usable = experiments[
+        experiments["model"].ne("dummy")
+        & experiments["permuted"].eq(False)
+        & experiments[primary_metric].notna()
+    ]
     if usable.empty:
         return {
             key: {"status": "NOT_ASSESSABLE", "reason": "no finite experiment metrics"}
@@ -96,11 +100,24 @@ def stability_decomposition(experiments: pd.DataFrame, primary_metric: str) -> d
                 "train_validation_split",
                 "model_family",
                 "preprocessing",
+                "molecular_representation",
                 "deployment_scenario",
             ]
         }
-    split_std = usable.groupby(["scenario", "model"])[primary_metric].std().dropna()
-    model_std = usable.groupby(["scenario", "seed"])[primary_metric].std().dropna()
+    representation_columns = ["representation"] if "representation" in usable else []
+    split_std = (
+        usable.groupby(["scenario", *representation_columns, "model"])[primary_metric]
+        .std()
+        .dropna()
+    )
+    model_std = (
+        usable.groupby(["scenario", *representation_columns, "seed"])[primary_metric].std().dropna()
+    )
+    representation_std = (
+        usable.groupby(["scenario", "seed", "model"])[primary_metric].std().dropna()
+        if representation_columns
+        else pd.Series(dtype=float)
+    )
     scenario_medians = usable.groupby("scenario")[primary_metric].median()
     return {
         "training_initialization": {
@@ -117,7 +134,13 @@ def stability_decomposition(experiments: pd.DataFrame, primary_metric: str) -> d
         },
         "preprocessing": {
             "status": "NOT_ASSESSABLE",
-            "reason": "one leakage-safe preprocessing policy was intentionally fixed",
+            "reason": "one train-fold-only preprocessing policy was fixed per representation",
+        },
+        "molecular_representation": {
+            "status": "ASSESSED" if len(representation_std) else "NOT_ASSESSABLE",
+            "median_standard_deviation": (
+                float(representation_std.median()) if len(representation_std) else None
+            ),
         },
         "deployment_scenario": {
             "status": "ASSESSED" if len(scenario_medians) > 1 else "NOT_ASSESSABLE",

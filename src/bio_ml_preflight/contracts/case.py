@@ -28,12 +28,29 @@ class TaskSpec(StrictModel):
 class EntitySpec(StrictModel):
     id_column: str
     representation_column: str | None = None
+    identity_conflict_policy: Literal["keep", "exclude", "aggregate"] | None = None
 
 
 class FeatureSpec(StrictModel):
     include: list[str] = Field(default_factory=list)
     exclude: list[str] = Field(default_factory=list)
     post_outcome: list[str] = Field(default_factory=list)
+    smiles_column: str | None = None
+    molecular_representations: list[Literal["character_hash", "morgan"]] = Field(
+        default_factory=list
+    )
+
+    @model_validator(mode="after")
+    def validate_molecular_representations(self) -> FeatureSpec:
+        if len(self.molecular_representations) != len(set(self.molecular_representations)):
+            raise ValueError("features.molecular_representations must be unique")
+        if self.molecular_representations and not self.smiles_column:
+            raise ValueError("features.smiles_column is required for molecular representations")
+        if self.smiles_column and self.include and self.smiles_column not in self.include:
+            raise ValueError("features.smiles_column must appear in features.include")
+        if self.smiles_column in self.exclude:
+            raise ValueError("features.smiles_column cannot be excluded")
+        return self
 
 
 class MetadataSpec(StrictModel):

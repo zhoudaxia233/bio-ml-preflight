@@ -24,6 +24,10 @@ Generated from structured artifacts. This retrospective preflight does not prove
 
 ## 3. Independence and replicate structure
 
+Identity-consistency gate:
+
+{{ identity_consistency }}
+
 {{ independence }}
 
 ## 4. Leakage findings
@@ -47,6 +51,10 @@ See `aggregate_experiments.parquet` and the metric figure below.
 Independent-group learning curve (when a realistic group axis is available):
 
 {{ learning_curve }}
+
+Representation sensitivity under identical split manifests and model families:
+
+{{ representation_table }}
 
 ## 8. Generalization scenarios
 
@@ -126,6 +134,8 @@ Task: <code>{{ case.task.kind }}</code> for prediction unit
 <section><h2>2. Data inventory</h2><pre><code>{{ inventory_json }}</code></pre></section>
 <section>
 <h2>3. Independence and replicate structure</h2>
+<h3>Identity-consistency gate</h3>
+<pre><code>{{ identity_consistency_json }}</code></pre>
 <pre><code>{{ independence_json }}</code></pre>
 </section>
 <section><h2>4. Leakage findings</h2><pre><code>{{ leakage_json }}</code></pre></section>
@@ -134,12 +144,33 @@ Task: <code>{{ case.task.kind }}</code> for prediction unit
 <section><h2>7. Baseline and permutation results</h2>
 <p>See <code>aggregate_experiments.parquet</code> for individual results.</p>
 <img src="figures/scenario_metrics.png" alt="Scenario metric comparison">
-<p>Independent-group learning curve:</p><pre><code>{{ learning_curve_json }}</code></pre></section>
+<p>Independent-group learning curve:</p><pre><code>{{ learning_curve_json }}</code></pre>
+<p>Representation sensitivity under identical split manifests and model families:</p>
+<table><thead><tr>
+<th>Claim or scenario</th><th>Status by representation</th><th>Median by representation</th>
+<th>Best model by representation</th><th>Matched-model medians</th>
+<th>Verdict changes</th><th>Conservative status</th>
+</tr></thead><tbody>
+{% for row in representation_rows %}
+<tr>
+<td>{{ row.claim_or_scenario }}</td>
+<td><code>{{ row.status_by_representation }}</code></td>
+<td><code>{{ row.median_by_representation }}</code></td>
+<td><code>{{ row.best_model_by_representation }}</code></td>
+<td><code>{{ row.matched_model_medians }}</code></td>
+<td>{{ row.verdict_changes }}</td>
+<td class="status status-{{ row.conservative_status }}">{{ row.conservative_status }}</td>
+</tr>
+{% endfor %}
+</tbody></table></section>
 <section><h2>8. Generalization scenarios</h2>
-<table><thead><tr><th>Scenario</th><th>Status</th><th>Numbers</th></tr></thead><tbody>
+<table><thead><tr>
+<th>Scenario</th><th>Representation</th><th>Status</th><th>Numbers</th>
+</tr></thead><tbody>
 {% for row in scenario_rows %}
 <tr>
 <td>{{ row.scenario }}</td>
+<td>{{ row.representation }}</td>
 <td class="status status-{{ row.status }}">{{ row.status }}</td>
 <td><code>{{ row.numbers }}</code></td>
 </tr>
@@ -150,11 +181,13 @@ Task: <code>{{ case.task.kind }}</code> for prediction unit
 <img src="figures/ranking_stability.png" alt="Ranking stability"></section>
 <section><h2>11. Capability matrix</h2>
 <table><thead><tr>
-<th>Claim or scenario</th><th>Status</th><th>Uncertainty</th><th>Cheapest next evidence</th>
+<th>Claim or scenario</th><th>Representation</th><th>Status</th>
+<th>Uncertainty</th><th>Cheapest next evidence</th>
 </tr></thead><tbody>
 {% for row in capability %}
 <tr>
 <td>{{ row.claim_or_scenario }}</td>
+<td>{{ row.representation|default("") }}</td>
 <td class="status status-{{ row.status }}">{{ row.status }}</td>
 <td>{{ row.uncertainty }}</td>
 <td>{{ row.cheapest_next_evidence }}</td>
@@ -202,6 +235,12 @@ def _table(rows: list[dict[str, Any]], columns: list[str]) -> str:
     return "\n".join([header, line, *body])
 
 
+def _capability_label(row: dict[str, Any]) -> str:
+    representation = row.get("representation")
+    suffix = f" [{representation}]" if representation else ""
+    return f"{row['claim_or_scenario']}{suffix}"
+
+
 def write_report(
     output: Path,
     *,
@@ -216,7 +255,19 @@ def write_report(
     experiments.to_parquet(output / "aggregate_experiments.parquet", index=False)
     ranking_table.to_parquet(output / "ranking_stability.parquet", index=False)
     capability = structured["capability_matrix"]
+    representation_sensitivity = structured["representation_sensitivity"]
     pd.DataFrame(capability).to_parquet(output / "capability_matrix.parquet", index=False)
+    representation_frame = pd.DataFrame(representation_sensitivity)
+    for column in [
+        "status_by_representation",
+        "median_by_representation",
+        "best_model_by_representation",
+        "matched_model_medians",
+    ]:
+        representation_frame[column] = representation_frame[column].map(
+            lambda value: json.dumps(value, sort_keys=True)
+        )
+    representation_frame.to_parquet(output / "representation_sensitivity.parquet", index=False)
     (output / "report.json").write_text(
         json.dumps(structured, indent=2, sort_keys=True, allow_nan=False), encoding="utf-8"
     )
@@ -225,6 +276,7 @@ def write_report(
     scenario_rows = [
         {
             "scenario": row["claim_or_scenario"],
+            "representation": row.get("representation", ""),
             "status": row["status"],
             "numbers": json.dumps(row["numbers"], sort_keys=True),
         }
@@ -235,20 +287,41 @@ def write_report(
         "case": case,
         "scenarios": ", ".join(scenario.name for scenario in case.generalization_scenarios),
         "inventory": _pretty(structured["audits"]["inventory"]),
+        "identity_consistency": _pretty(structured["audits"]["identity_consistency"]),
         "independence": _pretty(structured["audits"]["independence"]),
         "leakage": _pretty(structured["audits"]["leakage"]),
         "measurement": _pretty(structured["audits"]["measurement"]),
         "coverage": _pretty(structured["audits"]["coverage"]),
-        "scenario_table": _table(scenario_rows, ["scenario", "status", "numbers"]),
+        "scenario_table": _table(
+            scenario_rows, ["scenario", "representation", "status", "numbers"]
+        ),
         "learning_curve": _pretty(structured["learning_curve"]),
+        "representation_table": _table(
+            representation_sensitivity,
+            [
+                "claim_or_scenario",
+                "status_by_representation",
+                "median_by_representation",
+                "best_model_by_representation",
+                "matched_model_medians",
+                "verdict_changes",
+                "conservative_status",
+            ],
+        ),
         "stability": _pretty(structured["stability_decomposition"]),
         "ranking": _pretty(structured["ranking_stability"]),
         "capability_table": _table(
-            capability, ["claim_or_scenario", "status", "uncertainty", "cheapest_next_evidence"]
+            capability,
+            [
+                "claim_or_scenario",
+                "representation",
+                "status",
+                "uncertainty",
+                "cheapest_next_evidence",
+            ],
         ),
         "next_steps": "\n".join(
-            f"- **{row['claim_or_scenario']}**: {row['cheapest_next_evidence']}"
-            for row in capability
+            f"- **{_capability_label(row)}**: {row['cheapest_next_evidence']}" for row in capability
         ),
     }
     markdown = (
@@ -259,6 +332,9 @@ def write_report(
     (output / "report.md").write_text(markdown, encoding="utf-8")
     json_context = {
         "inventory_json": json.dumps(structured["audits"]["inventory"], indent=2, sort_keys=True),
+        "identity_consistency_json": json.dumps(
+            structured["audits"]["identity_consistency"], indent=2, sort_keys=True
+        ),
         "independence_json": json.dumps(
             structured["audits"]["independence"], indent=2, sort_keys=True
         ),
@@ -280,6 +356,7 @@ def write_report(
             case=case,
             scenarios=context["scenarios"],
             scenario_rows=scenario_rows,
+            representation_rows=representation_sensitivity,
             capability=capability,
             **json_context,
         )
@@ -296,10 +373,12 @@ def _metric_figure(experiments: pd.DataFrame, path: Path, metric: str) -> None:
     figure, axis = plt.subplots(figsize=(8, 4.5))
     real = experiments[experiments["permuted"].eq(False)]
     labels, values = [], []
-    for (scenario, model), group in real.groupby(["scenario", "model"]):
+    for (scenario, representation, model), group in real.groupby(
+        ["scenario", "representation", "model"]
+    ):
         finite = group[metric].dropna()
         if len(finite):
-            labels.append(f"{scenario}\n{model}")
+            labels.append(f"{scenario}\n{representation}\n{model}")
             values.append(float(finite.median()))
     axis.bar(range(len(values)), values, color="#2a6f97")
     axis.set_xticks(range(len(labels)), labels, rotation=35, ha="right")

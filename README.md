@@ -20,7 +20,7 @@ On macOS environments that hide editable `.pth` files, use the one-command check
 make demo
 ```
 
-Reports land under `reports/` and contain Markdown, HTML, JSON, figures, split manifests, per-run Parquet predictions, aggregate tables, a capability matrix, and provenance.
+Reports land under `reports/` and contain Markdown, HTML, JSON, figures, split manifests, per-run Parquet predictions, aggregate tables, a representation-sensitivity table, a capability matrix, and provenance.
 
 For an existing table:
 
@@ -49,7 +49,7 @@ Ranking decisions need decision-level evidence. Similar RMSE values can conceal 
 
 The versioned YAML schema is implemented with Pydantic v2 in `contracts/case.py`. Missing scientific metadata is not guessed. Its downstream question becomes `NOT_ASSESSABLE` or explicitly limited. Learned imputation, encoding, and scaling stay inside scikit-learn training pipelines. Split manifests are checksummed and reused.
 
-The baseline suite is deliberately bounded: dummy, linear/logistic, regularized linear, extra trees, histogram gradient boosting, and nearest neighbours. Smoke budgets use a strict subset. Pairwise cases also get entity-mean baselines and deterministic character/sequence representations. `uv sync --extra chem` enables RDKit utilities; the base package needs no GPU framework.
+The baseline suite is deliberately bounded: dummy, linear/logistic, regularized linear, extra trees, histogram gradient boosting, and nearest neighbours. Smoke budgets use a strict subset. Pairwise cases also get entity-mean baselines and deterministic character/sequence representations. A case can explicitly declare a SMILES column and compare the dependency-free character hash with RDKit Morgan fingerprints under identical split manifests and model families. `uv sync --extra chem` enables Morgan fingerprints and scaffold splitting; the base package needs no GPU framework.
 
 ## Davis demo
 
@@ -65,7 +65,7 @@ The case compares random-pair, cold-drug, and cold-target splits. Davis is publi
 
 ## BBB_Martins molecular-classification demo
 
-This second TDC demo predicts a binary BBB label from SMILES and compares a random-compound diagnostic with scaffold-separated validation.
+This second TDC demo predicts a binary BBB label from SMILES and compares a random-compound diagnostic with scaffold-separated validation. Its case explicitly excludes the 12 compound identifiers with conflicting labels or inconsistent SMILES (24 rows) before splitting, and records that policy in every report.
 
 ```bash
 uv run --python 3.11 --all-extras bio-ml-preflight demo bbb --budget smoke
@@ -73,7 +73,9 @@ uv run --python 3.11 --all-extras bio-ml-preflight demo bbb --budget smoke
 make demo-bbb
 ```
 
-It uses lightweight character features rather than a GNN. The purpose is to expose data and validation boundaries before spending on representation complexity.
+The smoke comparison reuses four checksummed manifests and the same logistic/extra-trees suite for character hashes and Morgan fingerprints. On the cached 2,006-row analysis set, median balanced accuracy was 0.733 versus 0.808 for random-compound and 0.709 versus 0.749 for scaffold validation. Both representations produced `SUPPORTED` verdicts in both scenarios, with zero compound overlap; this is retrospective capability evidence, not an external confirmation or a causal result.
+
+The v0.1 ladder stops there. A learned graph representation belongs behind the same feature-frame/evaluation seam only when fixed character/Morgan baselines fail a decision-relevant boundary, enough independent compounds exist to fit it without leakage, and a locked external validation can justify the added model class.
 
 ## Constrained Autoprobe
 
@@ -88,7 +90,7 @@ uv run bio-ml-preflight autoprobe evaluate runs/example/candidate.yaml
 
 A dataset adapter normalizes a source into a DataFrame/Parquet table, records source/version/retrieval/checksum metadata, and returns columns referenced by the same `CaseSpec`; `data/davis.py` is the working example. A future AnnData or LINCS L1000 adapter would do that normalization without changing audits or split contracts. A multi-output gene-expression task would extend target validation and metric aggregation (per-gene, per-cell type, and decision-weighted summaries) while retaining the same independent-unit, split-manifest, holdout, provenance, and capability contracts.
 
-DataSAIL is a future optional split provider: its assignment can be normalized into the existing persisted manifest and evaluated by the same overlap audit. It is intentionally not a v0.1 dependency.
+DataSAIL is a future optional split provider: its assignment can be normalized into the existing persisted manifest and evaluated by the same overlap audit. It is intentionally not a v0.1 dependency. Physicochemical descriptors and GNNs are likewise omitted from the base ladder until they answer a distinct scientific question that character hashes and Morgan fingerprints cannot.
 
 ## Development
 

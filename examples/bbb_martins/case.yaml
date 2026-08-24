@@ -13,10 +13,13 @@ entities:
   compound:
     id_column: compound_id
     representation_column: smiles
+    identity_conflict_policy: exclude
 features:
   include: [smiles]
   exclude: []
   post_outcome: []
+  smiles_column: smiles
+  molecular_representations: [character_hash, morgan]
 metadata:
   replicate_id: null
   biological_replicate_id: null

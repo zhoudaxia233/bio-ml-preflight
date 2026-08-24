@@ -36,6 +36,7 @@ def test_synthetic_qualitative_findings(tmp_path: Path, kind: SyntheticKind) -> 
         "report.html",
         "report.json",
         "aggregate_experiments.parquet",
+        "representation_sensitivity.parquet",
         "ranking_stability.parquet",
         "capability_matrix.parquet",
         "provenance.json",
@@ -45,6 +46,10 @@ def test_synthetic_qualitative_findings(tmp_path: Path, kind: SyntheticKind) -> 
     assert "<body><pre># Capability boundary report" not in html
     assert "<h1>Capability boundary report:" in html
     assert "<table>" in html
+    assert "<h3>Identity-consistency gate</h3>" in html
+    assert "Representation sensitivity under identical split manifests" in html
+    assert result["audits"]["identity_consistency"]["status"] == "NO_CONFLICTS"
+    assert result["representation_sensitivity"]
     scenario_section = html.split("<h2>8. Generalization scenarios</h2>", 1)[1].split(
         "</section>", 1
     )[0]

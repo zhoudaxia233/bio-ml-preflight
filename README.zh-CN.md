@@ -12,6 +12,7 @@
 - 检测随机切分、实体重叠、重复对和可疑 ID 特征造成的泄漏
 - 比较随机、分组、冷实体、双冷实体、时间和自定义切分
 - 运行 Dummy、线性模型、Extra Trees、梯度提升、近邻等 CPU 基线
+- 在完全相同的切分清单和模型族下比较字符哈希与 RDKit Morgan 指纹
 - 做独立单位 Bootstrap、分组标签置换和学习曲线
 - 检查整体指标稳定但 Top-k 候选不稳定的问题
 - 输出分场景能力结论，不生成一个误导性的总分
@@ -70,7 +71,11 @@ uv run --python 3.11 --all-extras bio-ml-preflight demo bbb --budget smoke
 make demo-bbb
 ```
 
-这里使用轻量字符特征，不训练 GNN；目的是先判断数据、切分和泛化边界。
+该 case 会在切分前显式排除 12 个存在标签冲突或 SMILES 不一致的化合物 ID（共 24 行），并把策略写入报告。字符哈希与 Morgan 指纹复用同一组四个切分清单和 logistic/Extra Trees 模型。
+
+缓存 smoke 结果中，随机化合物 balanced accuracy 为字符 `0.733`、Morgan `0.808`；scaffold 验证为字符 `0.709`、Morgan `0.749`。两种表示在两个场景中都得到 `SUPPORTED`，化合物跨折数均为 0。它们仍只是回顾性预测证据，不是外部确认或因果结论。
+
+v0.1 不加入 GNN。只有当字符/Morgan 基线在决策相关边界上失败、独立化合物数量足以无泄漏训练图模型，并且存在锁定外部验证时，才值得沿现有特征与评估接口增加学习式图表示。
 
 ## 分析自己的表格
 
@@ -102,6 +107,7 @@ uv run bio-ml-preflight discover data.csv --output discovery/
 - `report.md`、`report.html`、`report.json`
 - 数据审计和能力矩阵
 - 指标、置换检验和排序稳定性表
+- `representation_sensitivity.parquet` 中的逐表示、同模型配对结果
 - 固定的切分清单与每次运行的预测结果
 - 图表、环境信息、数据指纹和运行配置
 

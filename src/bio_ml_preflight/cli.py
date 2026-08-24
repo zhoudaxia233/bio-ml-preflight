@@ -263,9 +263,14 @@ def synthetic_case(kind: SyntheticKind, data_path: Path) -> CaseSpec:
 def _status_summary(result: dict[str, object]) -> str:
     rows = result["capability_matrix"]
     assert isinstance(rows, list)
-    return ", ".join(
-        f"{row['claim_or_scenario']}={row['status']}" for row in rows if isinstance(row, dict)
-    )
+    parts = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        representation = row.get("representation")
+        suffix = f"[{representation}]" if representation else ""
+        parts.append(f"{row['claim_or_scenario']}{suffix}={row['status']}")
+    return ", ".join(parts)
 
 
 def _project_root() -> Path:
