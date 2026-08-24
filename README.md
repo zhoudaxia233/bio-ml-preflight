@@ -1,5 +1,7 @@
 # bio-ml-preflight
 
+[中文说明](README.zh-CN.md)
+
 `bio-ml-preflight` asks what a dataset and a proposed prediction or ranking claim can support, where that evidence stops, and what inexpensive evidence would reduce the most important uncertainty. It is an evidence audit and bounded baseline runner—not AutoML, a leaderboard, a biological hypothesis generator, or proof of future performance.
 
 ## Quick start
