@@ -7,3 +7,5 @@
 - Preserve split manifests and never expose holdout labels to adaptive probing.
 - Prefer a transparent baseline or rule over a speculative abstraction.
 - A predictive association is not a causal effect.
+- After verifying that a feature branch has been merged, delete it both locally
+  and from its remote; never delete unmerged, default, or protected branches.
