@@ -39,5 +39,9 @@ def test_synthetic_qualitative_findings(tmp_path: Path, kind: SyntheticKind) -> 
         "provenance.json",
     ]:
         assert (report / artifact).exists()
+    html = (report / "report.html").read_text(encoding="utf-8")
+    assert "<body><pre># Capability boundary report" not in html
+    assert "<h1>Capability boundary report:" in html
+    assert "<table>" in html
     assert list((report / "split_manifests").glob("*.json"))
     assert list((report / "predictions").glob("*.parquet"))
