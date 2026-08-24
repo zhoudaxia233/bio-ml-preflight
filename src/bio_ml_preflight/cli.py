@@ -20,7 +20,10 @@ from bio_ml_preflight.contracts.case import (
     ThresholdSpec,
 )
 from bio_ml_preflight.data import read_table
-from bio_ml_preflight.data.bbb import load_bbb_martins
+from bio_ml_preflight.data.bbb import (
+    load_b3db_external_confirmation,
+    load_bbb_martins,
+)
 from bio_ml_preflight.data.davis import load_davis
 from bio_ml_preflight.data.synthetic import SyntheticKind, generate_synthetic
 from bio_ml_preflight.discovery import discover_tasks
@@ -102,13 +105,21 @@ def run_command(
     case_yaml: Annotated[Path, typer.Argument(exists=True, readable=True)],
     budget: Annotated[str, typer.Option("--budget")] = "smoke",
     output: Annotated[Path | None, typer.Option("--output", "-o")] = None,
+    holdout_override_reason: Annotated[
+        str | None, typer.Option("--holdout-override-reason")
+    ] = None,
 ) -> None:
     """Run deterministic audits and baseline probes for a declared case."""
     if budget not in {"smoke", "standard"}:
         raise typer.BadParameter("budget must be smoke or standard")
     case = load_case(case_yaml)
     destination = output or Path("reports") / case.case_id
-    result = run_case(case, destination, budget=budget)
+    result = run_case(
+        case,
+        destination,
+        budget=budget,
+        holdout_override_reason=holdout_override_reason,
+    )
     typer.echo(f"Report: {destination / 'report.md'}")
     typer.echo(_status_summary(result))
 
@@ -165,6 +176,31 @@ def demo_bbb(
     load_bbb_martins(data_path.parent)
     case = load_case(root / "examples" / "bbb_martins" / "case.yaml")
     result = run_case(case, output, budget=budget)
+    typer.echo(_status_summary(result))
+
+
+@demo_app.command("bbb-external")
+def demo_bbb_external(
+    output: Annotated[Path, typer.Option("--output", "-o")] = Path(
+        "reports/b3db-postrelease-confirmation"
+    ),
+    holdout_override_reason: Annotated[
+        str | None, typer.Option("--holdout-override-reason")
+    ] = None,
+) -> None:
+    """Run the locked Morgan/logistic candidate once on B3DB's post-release set."""
+    root = _project_root()
+    load_b3db_external_confirmation(
+        root / "data" / "cache" / "b3db_external_confirmation",
+        development_cache_dir=root / "data" / "cache" / "bbb_martins",
+    )
+    case = load_case(root / "examples" / "b3db_external" / "case.yaml")
+    result = run_case(
+        case,
+        output,
+        budget="smoke",
+        holdout_override_reason=holdout_override_reason,
+    )
     typer.echo(_status_summary(result))
 
 

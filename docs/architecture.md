@@ -6,6 +6,8 @@ An optional molecular representation ladder is declared in `FeatureSpec`. The ru
 
 Contracts point inward: adapters normalize source data, while the runner depends only on the normalized table and case. There is no one-implementation adapter interface. Add an adapter as a plain loader like `data/davis.py`, with schema checks and a source record, then expose it in the CLI.
 
+The B3DB confirmation adapter is the minimal external-validation path: it pins and checksums the public source, normalizes cross-dataset identity to InChIKey, removes overlapping development identities, and emits one combined table with supplied train/holdout assignments. The case fingerprint freezes the representation, model allowlist, metric, threshold, class-support floor, and access limit.
+
 Invariant Autoprobe components are the loader, case, manifests, evaluator, metrics, holdout ledger, and provenance. Its only mutable input is `candidate.yaml`. Generated JSON/Parquet artifacts—not narrative text—are numerical truth.
 
 Future AnnData and LINCS loaders should materialize an analysis table plus representation/artifact references. Future multi-output tasks can add a target-matrix contract and metric aggregation while retaining split, independence, holdout, and capability interfaces.

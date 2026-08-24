@@ -15,7 +15,12 @@ def test_representations_reuse_one_split_manifest_and_model_suite(
     frame = generate_synthetic("no_signal", data_path)
     case = synthetic_case("no_signal", data_path)
     case.generalization_scenarios = [ScenarioSpec(name="random", strategy="random")]
-    case.evaluation = EvaluationSpec(seeds=[11], primary_metric="spearman", permutation_draws=1)
+    case.evaluation = EvaluationSpec(
+        seeds=[11],
+        primary_metric="spearman",
+        permutation_draws=1,
+        model_allowlist=["elastic_net"],
+    )
     monkeypatch.setattr(
         runner_module,
         "build_feature_frames",
@@ -26,7 +31,7 @@ def test_representations_reuse_one_split_manifest_and_model_suite(
     )
 
     output = tmp_path / "report"
-    result = runner_module.run_case(case, output, model_allowlist={"elastic_net"})
+    result = runner_module.run_case(case, output)
 
     assert len(list((output / "split_manifests").glob("*.json"))) == 1
     predictions = [pd.read_parquet(path) for path in (output / "predictions").glob("*.parquet")]

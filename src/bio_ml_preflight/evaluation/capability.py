@@ -149,6 +149,7 @@ def capability_matrix(
             audit_summary,
             scenario_overlap,
         )
+        _apply_test_class_limit(verdict, case, scenario_overlap)
         rows.append(verdict)
     if case.decision.kind == "top_k_per_group":
         k = str(min(case.decision.k))
@@ -218,11 +219,13 @@ def _audit_conflicts(audits: dict[str, Any]) -> dict[str, int]:
 
 def _overlap_summary(
     overlap_results: dict[str, Any], case: CaseSpec, scenario: ScenarioSpec
-) -> dict[str, float | int]:
+) -> dict[str, Any]:
     protected_columns = {
         value
         for value in (
-            scenario.group_column if scenario.strategy in {"group", "scaffold"} else None,
+            scenario.group_column
+            if scenario.strategy in {"group", "scaffold", "supplied"}
+            else None,
             scenario.left_column if scenario.strategy in {"cold_left", "double_cold"} else None,
             scenario.right_column if scenario.strategy in {"cold_right", "double_cold"} else None,
         )
@@ -234,11 +237,13 @@ def _overlap_summary(
         if entity.id_column in protected_columns
         or (scenario.strategy == "scaffold" and entity.representation_column in protected_columns)
     }
-    summary: dict[str, float | int] = {
+    summary: dict[str, Any] = {
         "exact_duplicate_overlap": 0,
         "pair_overlap": 0,
         "protected_entity_overlap_count": 0,
         "protected_entity_overlap_fraction": 0.0,
+        "test_target_counts": {},
+        "test_target_count_unit": None,
     }
     for key, result in overlap_results.items():
         if key.rsplit(":", 1)[0] != scenario.name:
@@ -250,6 +255,23 @@ def _overlap_summary(
         summary["pair_overlap"] = max(
             int(summary["pair_overlap"]), int(result.get("pair_overlap") or 0)
         )
+        target_counts = result.get("test_target_counts", {})
+        if target_counts:
+            minimum_counts = summary["test_target_counts"]
+            labels = set(minimum_counts) | {str(label) for label in target_counts}
+            if minimum_counts:
+                summary["test_target_counts"] = {
+                    label: min(
+                        int(minimum_counts.get(label, 0)),
+                        int(target_counts.get(label, 0)),
+                    )
+                    for label in labels
+                }
+            else:
+                summary["test_target_counts"] = {
+                    str(label): int(count) for label, count in target_counts.items()
+                }
+            summary["test_target_count_unit"] = result.get("test_target_count_unit")
         for entity_name in protected_entities:
             entity_overlap = result.get("entity_overlap", {}).get(entity_name, {})
             summary["protected_entity_overlap_count"] = max(
@@ -314,6 +336,41 @@ def _apply_audit_limits(
     )
     verdict["cheapest_next_evidence"] = (
         "Resolve conflicting entity records and regenerate overlap-free split manifests."
+    )
+
+
+def _apply_test_class_limit(
+    verdict: dict[str, Any], case: CaseSpec, overlap: dict[str, Any]
+) -> None:
+    required = case.thresholds.minimum_test_class_count
+    if case.task.kind != "binary_classification" or required is None:
+        return
+    counts = {str(key): int(value) for key, value in overlap["test_target_counts"].items()}
+    if not counts:
+        return
+    observed = min(counts.values()) if len(counts) >= 2 else 0
+    count_unit = str(overlap.get("test_target_count_unit") or "independent units")
+    verdict["numbers"]["test_class_counts"] = counts
+    verdict["numbers"]["test_class_count_unit"] = count_unit
+    verdict["numbers"]["minimum_test_class_count_required"] = required
+    verdict["uncertainty"] += f" Minimum holdout class count={observed}."
+    if observed >= required:
+        verdict["evidence_supporting"].append(
+            f"Both holdout classes meet the configured minimum of {required}."
+        )
+        return
+    verdict["evidence_against"].append(
+        f"The minority holdout class has {observed} independent {count_unit} values; "
+        f"the configured minimum is {required}."
+    )
+    if verdict["status"] not in {"NOT_ASSESSABLE", "CONTRADICTED"}:
+        verdict["status"] = "INSUFFICIENT_EVIDENCE"
+    verdict["unmet_assumptions"].append(
+        "The external set must contain enough independent examples from both classes."
+    )
+    verdict["cheapest_next_evidence"] = (
+        f"Add at least {required - observed} independent minority-class holdout examples "
+        "under the locked protocol."
     )
 
 

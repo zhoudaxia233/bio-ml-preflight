@@ -77,6 +77,18 @@ make demo-bbb
 
 v0.1 不加入 GNN。只有当字符/Morgan 基线在决策相关边界上失败、独立化合物数量足以无泄漏训练图模型，并且存在锁定外部验证时，才值得沿现有特征与评估接口增加学习式图表示。
 
+## 跑锁定的 B3DB 发布后确认
+
+该 Demo 在查看外部模型结果前锁定 BBB_Martins 开发阶段选出的 Morgan 表示与 logistic 模型。适配器固定并校验 B3DB 官方源码，用 RDKit InChIKey 统一身份，并从开发集移除与 175 条发布后记录重合的 10 个化合物，同时保留完整外部集。最终 supplied manifest 含 1,992 条训练记录和 175 条 holdout 记录，化合物重叠为 0；访问账本按数据校验和固定，并为每次访问记录 case 指纹，因此更换输出目录或 case 参数也不能绕过单次访问限制。
+
+```bash
+uv run --python 3.11 --all-extras bio-ml-preflight demo bbb-external
+# 等价的一键命令：
+make demo-bbb-external
+```
+
+锁定运行的 balanced accuracy 为 `0.904`，9 次置换中位数 `0.496`（差值 `0.407`，经验 p 值 `0.10`）。但能力结论仍为 `INSUFFICIENT_EVIDENCE`：外部集有 171 个阳性、仅 4 个独立阴性化合物，未达到预先声明的每类至少 20 个。最便宜的下一证据是在相同协议下再收集至少 16 个独立阴性 holdout 化合物。它是公开数据上的发布后伪封存检查，不是真盲或按实验时间前瞻的研究；测量可靠性与批次混杂仍为 `NOT_ASSESSABLE`。运行后的治理审查在不重新读取外部标签的前提下强化了缓存校验、来源记录和访问账本；原始数值产物仍是事实来源。
+
 ## 分析自己的表格
 
 支持 CSV、TSV 和 Parquet。

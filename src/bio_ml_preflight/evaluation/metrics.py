@@ -43,13 +43,15 @@ def compute_metrics(
     y_true: npt.NDArray[np.float64],
     y_pred: npt.NDArray[np.float64],
     task_kind: str,
+    *,
+    classification_threshold: float = 0.5,
 ) -> dict[str, float | None]:
     finite = np.isfinite(y_true) & np.isfinite(y_pred)
     y_true, y_pred = y_true[finite], y_pred[finite]
     if not len(y_true):
         return {"applicable": None}
     if task_kind == "binary_classification":
-        predicted_class = (y_pred >= 0.5).astype(int)
+        predicted_class = (y_pred >= classification_threshold).astype(int)
         both_classes = len(np.unique(y_true)) == 2
         return {
             "balanced_accuracy": float(balanced_accuracy_score(y_true, predicted_class)),

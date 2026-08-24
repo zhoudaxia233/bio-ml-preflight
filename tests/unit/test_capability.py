@@ -145,3 +145,60 @@ def test_protected_entity_overlap_caps_support(tmp_path) -> None:
     assert row["numbers"]["protected_entity_overlap_fraction"] == 0.1
     assert ranking["status"] == "SUPPORTED_WITH_LIMITS"
     assert ranking["numbers"]["protected_entity_overlap_count"] == 1
+
+
+def test_small_external_minority_class_blocks_confirmation(tmp_path) -> None:
+    case = synthetic_case("no_signal", tmp_path / "x.parquet")
+    case.task.kind = "binary_classification"
+    case.evaluation.primary_metric = "balanced_accuracy"
+    case.thresholds.supported_metric = 0.65
+    case.thresholds.limited_metric = 0.55
+    case.thresholds.minimum_test_class_count = 20
+    case.generalization_scenarios = [
+        ScenarioSpec(
+            name="external",
+            strategy="supplied",
+            split_column="validation_split",
+            group_column="group_id",
+        )
+    ]
+    experiments = pd.DataFrame(
+        [
+            {
+                "scenario": "external",
+                "strategy": "supplied",
+                "model": "logistic",
+                "permuted": False,
+                "permutation_draw": None,
+                "balanced_accuracy": 0.8,
+            },
+            *[
+                {
+                    "scenario": "external",
+                    "strategy": "supplied",
+                    "model": "logistic",
+                    "permuted": True,
+                    "permutation_draw": draw,
+                    "balanced_accuracy": 0.5,
+                }
+                for draw in range(9)
+            ],
+        ]
+    )
+    overlap = {
+        "external:11": {
+            "test_target_counts": {"0": 4, "1": 171},
+            "test_target_count_unit": "compound_id",
+            "exact_duplicate_overlap": 0,
+            "pair_overlap": 0,
+            "entity_overlap": {"group": {"count": 0, "test_fraction": 0.0}},
+        }
+    }
+
+    row = capability_matrix(experiments, case, {}, audits={}, overlap_results=overlap)[0]
+
+    assert row["status"] == "INSUFFICIENT_EVIDENCE"
+    assert row["numbers"]["test_class_counts"] == {"0": 4, "1": 171}
+    assert row["numbers"]["test_class_count_unit"] == "compound_id"
+    assert row["numbers"]["minimum_test_class_count_required"] == 20
+    assert "at least 16" in row["cheapest_next_evidence"]

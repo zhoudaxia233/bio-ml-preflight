@@ -3,6 +3,7 @@ import pandas as pd
 
 from bio_ml_preflight.evaluation.metrics import (
     bootstrap_interval,
+    compute_metrics,
     empirical_permutation_summary,
     group_respecting_permutation,
 )
@@ -24,6 +25,17 @@ def test_empirical_permutation_summary_uses_upper_tail_with_correction() -> None
     assert result["draws"] == 4
     assert result["median"] == 0.25
     assert result["p_value"] == 0.4
+
+
+def test_binary_metrics_use_the_declared_classification_threshold() -> None:
+    result = compute_metrics(
+        np.array([0.0, 1.0]),
+        np.array([0.6, 0.8]),
+        "binary_classification",
+        classification_threshold=0.7,
+    )
+
+    assert result["balanced_accuracy"] == 1.0
 
 
 def test_bootstrap_resamples_independent_units() -> None:

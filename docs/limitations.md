@@ -13,3 +13,5 @@
 - BBB_Martins contains repeated compound identifiers, conflicting labels, and inconsistent structures for some names. The adapter preserves them; the example case explicitly excludes all affected identifiers before splitting and records the narrowed analysis population.
 - Representation sensitivity is retrospective and based on two smoke manifests per scenario. Fixed manifests and matched model families isolate the comparison better, but do not replace locked external validation.
 - Invalid SMILES produce zero Morgan vectors; v0.1 does not guess a chemical correction, so callers must validate input chemistry before confirmatory use.
+- The B3DB post-release set has 171 positive and only 4 negative compounds. Its locked point estimate is therefore `INSUFFICIENT_EVIDENCE` despite high balanced accuracy; at least 16 more independent negatives are needed to meet the declared class-support floor.
+- Excluding exact InChIKey overlap does not prove publication-, laboratory-, protocol-, or near-structure independence. B3DB `reference` and `group` fields are preserved as source fields and are not relabeled as batches or replicates.

@@ -4,13 +4,16 @@ MPLCONFIGDIR ?= .matplotlib-cache
 PYTHON ?= 3.11
 export UV_PROJECT_ENVIRONMENT UV_CACHE_DIR MPLCONFIGDIR
 
-.PHONY: demo demo-bbb demo-davis check
+.PHONY: demo demo-bbb demo-bbb-external demo-davis check
 
 demo:
 	uv run --python $(PYTHON) bio-ml-preflight demo synthetic --budget smoke
 
 demo-bbb:
 	uv run --python $(PYTHON) --all-extras bio-ml-preflight demo bbb --budget smoke
+
+demo-bbb-external:
+	uv run --python $(PYTHON) --all-extras bio-ml-preflight demo bbb-external
 
 demo-davis:
 	uv run --python $(PYTHON) --all-extras bio-ml-preflight demo davis --budget smoke

@@ -10,7 +10,7 @@ from bio_ml_preflight.audits import (
 from bio_ml_preflight.cli import synthetic_case
 from bio_ml_preflight.contracts.case import EntitySpec, ScenarioSpec
 from bio_ml_preflight.data.synthetic import generate_synthetic
-from bio_ml_preflight.runner import run_case
+from bio_ml_preflight.runner import _test_target_counts, run_case
 from bio_ml_preflight.splits import create_split
 
 
@@ -194,3 +194,56 @@ def test_grouping_by_representation_cannot_split_one_identity_across_folds(tmp_p
 
     with pytest.raises(ValueError, match="identifiers cross train and test"):
         run_case(case, tmp_path / "report", model_allowlist={"dummy"})
+
+
+def test_supplied_holdout_cannot_reuse_a_protected_identity(tmp_path) -> None:
+    frame = pd.DataFrame(
+        {
+            "compound_id": ["a", "a", "b", "c", "d", "e"],
+            "smiles": ["CC", "CC", "CO", "CN", "CF", "CCl"],
+            "split": ["train", "holdout", "train", "train", "holdout", "holdout"],
+            "y": [0, 0, 1, 0, 1, 0],
+        }
+    )
+    path = tmp_path / "compounds.parquet"
+    frame.to_parquet(path)
+    case = synthetic_case("no_signal", path)
+    case.task.kind = "binary_classification"
+    case.task.prediction_unit = "compound"
+    case.features.include = ["smiles"]
+    case.entities = {
+        "compound": EntitySpec(
+            id_column="compound_id",
+            representation_column="smiles",
+            identity_conflict_policy="keep",
+        )
+    }
+    case.generalization_scenarios = [
+        ScenarioSpec(
+            name="external",
+            strategy="supplied",
+            split_column="split",
+            group_column="compound_id",
+        )
+    ]
+    case.evaluation.seeds = [11]
+
+    with pytest.raises(ValueError, match="identifiers cross train and test"):
+        run_case(case, tmp_path / "report", model_allowlist={"dummy"})
+
+
+def test_binary_class_support_counts_independent_units_not_rows(tmp_path) -> None:
+    frame = pd.DataFrame(
+        {
+            "compound_id": ["a", "a", "b"],
+            "y": [0, 0, 1],
+        }
+    )
+    case = synthetic_case("no_signal", tmp_path / "unused.parquet")
+    case.task.kind = "binary_classification"
+    case.evaluation.bootstrap_unit = "compound_id"
+
+    counts, unit = _test_target_counts(frame, np.array([0, 1, 2]), case)
+
+    assert counts == {"0": 1, "1": 1}
+    assert unit == "compound_id"

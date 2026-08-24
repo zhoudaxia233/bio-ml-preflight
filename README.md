@@ -77,6 +77,18 @@ The smoke comparison reuses four checksummed manifests and the same logistic/ext
 
 The v0.1 ladder stops there. A learned graph representation belongs behind the same feature-frame/evaluation seam only when fixed character/Morgan baselines fail a decision-relevant boundary, enough independent compounds exist to fit it without leakage, and a locked external validation can justify the added model class.
 
+## Locked B3DB post-release confirmation
+
+The confirmatory demo freezes the development-selected Morgan representation and logistic probe before evaluating B3DB's 175 post-release records. The adapter pins and checksums the official source, derives comparable RDKit InChIKeys, and removes 10 matching identities from BBB_Martins development while retaining the entire external set. A supplied manifest then contains 1,992 training rows and 175 holdout rows with zero compound overlap. The holdout ledger is keyed by the dataset checksum and records the case fingerprint for every access, so changing the report output or case parameters cannot bypass the one-access limit.
+
+```bash
+uv run --python 3.11 --all-extras bio-ml-preflight demo bbb-external
+# Equivalent one-command checkout target:
+make demo-bbb-external
+```
+
+The locked run produced balanced accuracy `0.904`, versus a nine-draw permutation median of `0.496` (delta `0.407`, empirical p-value `0.10`). That favorable point estimate is still `INSUFFICIENT_EVIDENCE`: the external set contains 171 positive but only 4 independent negative compounds, below the predeclared minimum of 20 per class. The cheapest next evidence is at least 16 additional independent negative holdout compounds under the same protocol. This is a public, release-time pseudo-sealed check—not a blinded or assay-time prospective study; measurement reliability and batch confounding remain `NOT_ASSESSABLE`. A post-run governance review strengthened cache verification, provenance, and holdout-ledger enforcement without rerunning the external labels; the original numerical artifacts remain the source of truth.
+
 ## Constrained Autoprobe
 
 Autoprobe freezes the case, evaluator, metrics, manifests, holdout policy, and provenance. Only `candidate.yaml` changes. Unlike unrestricted autoresearch, it has bounded experiments, multiple scientific guardrails, a vector result instead of one universal score, and no final-holdout access.

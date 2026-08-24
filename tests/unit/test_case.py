@@ -38,3 +38,23 @@ def test_molecular_representation_ladder_requires_an_explicit_smiles_column() ->
     }
     with pytest.raises(ValidationError, match="smiles_column"):
         CaseSpec.model_validate(payload)
+
+
+def test_minimum_test_class_count_requires_an_independent_unit() -> None:
+    payload = {
+        "schema_version": 1,
+        "case_id": "external",
+        "data": {"path": "data.csv"},
+        "task": {
+            "kind": "binary_classification",
+            "prediction_unit": "compound",
+            "target_column": "y",
+        },
+        "generalization_scenarios": [
+            {"name": "external", "strategy": "supplied", "split_column": "split"}
+        ],
+        "thresholds": {"minimum_test_class_count": 20},
+    }
+
+    with pytest.raises(ValidationError, match="evaluation.bootstrap_unit"):
+        CaseSpec.model_validate(payload)

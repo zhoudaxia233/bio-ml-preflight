@@ -19,7 +19,12 @@ class HoldoutLedger:
         ]
 
     def record_access(
-        self, *, actor: str, purpose: str, override_reason: str | None = None
+        self,
+        *,
+        actor: str,
+        purpose: str,
+        override_reason: str | None = None,
+        case_fingerprint: str | None = None,
     ) -> None:
         count = sum(entry["event"] == "access" for entry in self.entries())
         if count >= self.maximum_accesses and not override_reason:
@@ -35,6 +40,7 @@ class HoldoutLedger:
             "access_number": count + 1,
             "override": count >= self.maximum_accesses,
             "override_reason": override_reason,
+            "case_fingerprint": case_fingerprint,
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as handle:

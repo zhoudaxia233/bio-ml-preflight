@@ -17,6 +17,7 @@ from bio_ml_preflight.audits import (
 from bio_ml_preflight.contracts import CaseSpec
 from bio_ml_preflight.contracts.case import ScenarioSpec
 from bio_ml_preflight.data import read_table
+from bio_ml_preflight.data.io import file_checksum
 from bio_ml_preflight.evaluation.capability import capability_matrix
 from bio_ml_preflight.evaluation.metrics import (
     compute_metrics,
@@ -25,7 +26,7 @@ from bio_ml_preflight.evaluation.metrics import (
 )
 from bio_ml_preflight.features import build_feature_frames
 from bio_ml_preflight.models.probes import build_probe_suite, entity_mean_predictions
-from bio_ml_preflight.provenance import build_provenance
+from bio_ml_preflight.provenance import HoldoutLedger, build_provenance
 from bio_ml_preflight.reporting import write_report
 from bio_ml_preflight.splits import create_split
 from bio_ml_preflight.stability.ranking import ranking_stability, stability_decomposition
@@ -37,9 +38,27 @@ def run_case(
     *,
     budget: str = "smoke",
     model_allowlist: set[str] | None = None,
+    holdout_override_reason: str | None = None,
 ) -> dict[str, Any]:
+    data_path = Path(case.data.path)
+    holdout_access: list[dict[str, Any]] = []
+    if case.holdout.enabled:
+        if any(scenario.strategy != "supplied" for scenario in case.generalization_scenarios):
+            raise ValueError("Enabled holdouts require supplied split assignments")
+        dataset_checksum = file_checksum(data_path)
+        ledger = HoldoutLedger(
+            data_path.parent / "holdout_access" / f"{dataset_checksum}.jsonl",
+            maximum_accesses=case.holdout.maximum_accesses,
+        )
+        ledger.record_access(
+            actor="bio-ml-preflight",
+            purpose=f"locked confirmation run for {case.case_id}",
+            override_reason=holdout_override_reason,
+            case_fingerprint=case.fingerprint(),
+        )
+        holdout_access = ledger.entries()
     started = time.perf_counter()
-    frame = read_table(Path(case.data.path)).reset_index(drop=True)
+    frame = read_table(data_path).reset_index(drop=True)
     _validate_columns(frame, case)
     frame, identity_consistency = apply_identity_conflict_policies(frame, case)
     _validate_columns(frame, case)
@@ -52,6 +71,13 @@ def run_case(
     manifest_dir = output / "split_manifests"
     prediction_dir.mkdir(exist_ok=True)
     manifest_dir.mkdir(exist_ok=True)
+    effective_allowlist = set(case.evaluation.model_allowlist) or None
+    if model_allowlist is not None:
+        effective_allowlist = (
+            model_allowlist
+            if effective_allowlist is None
+            else effective_allowlist & model_allowlist
+        )
     records: list[dict[str, Any]] = []
     ranking_predictions: list[pd.DataFrame] = []
     learning_records: list[dict[str, Any]] = []
@@ -65,16 +91,24 @@ def run_case(
             train_indices = np.asarray(manifest.train_indices)
             test_indices = np.asarray(manifest.test_indices)
             overlap = audit_overlap(frame, train_indices, test_indices, case)
+            if case.task.kind == "binary_classification":
+                counts, unit = _test_target_counts(frame, test_indices, case)
+                overlap["test_target_counts"] = counts
+                overlap["test_target_count_unit"] = unit
             _validate_protected_entity_isolation(case, scenario, overlap)
             manifest.save(manifest_path)
             split_hashes[f"{scenario.name}:{seed}"] = manifest.fingerprint()
             overlap_results[f"{scenario.name}:{seed}"] = overlap
             for representation, features in feature_frames.items():
                 suite = build_probe_suite(features, case.task.kind, seed, budget)
-                if model_allowlist is not None:
+                if effective_allowlist is not None:
                     suite = {
-                        name: model for name, model in suite.items() if name in model_allowlist
+                        name: model for name, model in suite.items() if name in effective_allowlist
                     }
+                if not suite:
+                    raise ValueError(
+                        "No configured model is available for the requested task and budget"
+                    )
                 for model_name, model in suite.items():
                     run_id = f"{scenario.name}__{representation}__{model_name}__seed-{seed}"
                     fit_started = time.perf_counter()
@@ -88,7 +122,10 @@ def run_case(
                             y_all = model.predict(features)
                     runtime = time.perf_counter() - fit_started
                     metrics = compute_metrics(
-                        target[test_indices], np.asarray(y_test), case.task.kind
+                        target[test_indices],
+                        np.asarray(y_test),
+                        case.task.kind,
+                        classification_threshold=case.evaluation.classification_threshold,
                     )
                     record = _record(
                         scenario.name,
@@ -168,6 +205,9 @@ def run_case(
                                         target[test_indices],
                                         np.asarray(perm_prediction),
                                         case.task.kind,
+                                        classification_threshold=(
+                                            case.evaluation.classification_threshold
+                                        ),
                                     ),
                                     representation=representation,
                                     model_configuration=_model_configuration(perm_model),
@@ -207,7 +247,7 @@ def run_case(
                             case,
                             budget,
                             seed,
-                            model_allowlist,
+                            effective_allowlist,
                         )
                     )
             if case.task.kind != "binary_classification" and len(case.entities) >= 2:
@@ -223,7 +263,10 @@ def run_case(
                     for model_name, baseline_prediction in baselines.items():
                         run_id = f"{scenario.name}__{model_name}__seed-{seed}"
                         metrics = compute_metrics(
-                            target[test_indices], baseline_prediction, case.task.kind
+                            target[test_indices],
+                            baseline_prediction,
+                            case.task.kind,
+                            classification_threshold=case.evaluation.classification_threshold,
                         )
                         records.append(
                             _record(
@@ -308,6 +351,7 @@ def run_case(
         "ranking_stability": ranking,
         "representation_sensitivity": representation_sensitivity,
         "capability_matrix": capability,
+        "holdout_access": holdout_access,
         "provenance": provenance,
     }
     write_report(
@@ -590,7 +634,12 @@ def _learning_curve(
                 prediction = model.predict_proba(features.iloc[test_indices])[:, 1]
             else:
                 prediction = model.predict(features.iloc[test_indices])
-        metrics = compute_metrics(target[test_indices], np.asarray(prediction), case.task.kind)
+        metrics = compute_metrics(
+            target[test_indices],
+            np.asarray(prediction),
+            case.task.kind,
+            classification_threshold=case.evaluation.classification_threshold,
+        )
         rows.append(
             {
                 "scenario": scenario,
@@ -622,6 +671,9 @@ def _ranking_candidate_column(
 def _validate_columns(frame: pd.DataFrame, case: CaseSpec) -> None:
     required = {case.task.target_column}
     required.update(entity.id_column for entity in case.entities.values())
+    if case.thresholds.minimum_test_class_count is not None:
+        assert case.evaluation.bootstrap_unit is not None
+        required.add(case.evaluation.bootstrap_unit)
     missing = sorted(required - set(frame.columns))
     if missing:
         raise ValueError(f"Case references missing required columns: {missing}")
@@ -631,10 +683,36 @@ def _validate_columns(frame: pd.DataFrame, case: CaseSpec) -> None:
         )
 
 
+def _test_target_counts(
+    frame: pd.DataFrame,
+    test_indices: npt.NDArray[np.int64],
+    case: CaseSpec,
+) -> tuple[dict[str, int], str]:
+    target = case.task.target_column
+    unit = case.evaluation.bootstrap_unit
+    test = frame.iloc[test_indices]
+    if unit and unit in test:
+        target_counts = test.groupby(unit, dropna=False)[target].nunique(dropna=False)
+        if (target_counts > 1).any():
+            raise ValueError(f"Independent test unit {unit!r} maps to conflicting targets")
+        support = test.drop_duplicates(unit)
+        count_unit = unit
+    else:
+        support = test
+        count_unit = "rows"
+    return (
+        {
+            str(label): int(count)
+            for label, count in support[target].value_counts().sort_index().items()
+        },
+        count_unit,
+    )
+
+
 def _validate_protected_entity_isolation(
     case: CaseSpec, scenario: ScenarioSpec, overlap: dict[str, Any]
 ) -> None:
-    if scenario.strategy not in {"group", "scaffold"}:
+    if scenario.strategy not in {"group", "scaffold", "supplied"}:
         return
     grouping_column = scenario.group_column
     for name, entity in case.entities.items():

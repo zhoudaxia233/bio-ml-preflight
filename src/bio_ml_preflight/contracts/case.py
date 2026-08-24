@@ -13,7 +13,7 @@ class StrictModel(BaseModel):
 
 
 class DataSpec(StrictModel):
-    adapter: Literal["tabular", "davis", "bbb_martins"] = "tabular"
+    adapter: Literal["tabular", "davis", "bbb_martins", "b3db_external"] = "tabular"
     path: str
     fingerprint_columns: list[str] = Field(default_factory=list)
 
@@ -105,12 +105,16 @@ class EvaluationSpec(StrictModel):
     primary_metric: str = "spearman"
     secondary_metrics: list[str] = Field(default_factory=lambda: ["mae", "rmse"])
     bootstrap_unit: str | None = None
+    classification_threshold: float = Field(default=0.5, ge=0, le=1)
     permutation_draws: int = Field(default=9, ge=1, le=100)
+    model_allowlist: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def seeds_are_unique(self) -> EvaluationSpec:
         if not self.seeds or len(self.seeds) != len(set(self.seeds)):
             raise ValueError("evaluation.seeds must contain unique values")
+        if len(self.model_allowlist) != len(set(self.model_allowlist)):
+            raise ValueError("evaluation.model_allowlist must contain unique values")
         return self
 
 
@@ -127,6 +131,7 @@ class ThresholdSpec(StrictModel):
     maximum_dispersion: float = 0.15
     minimum_permutation_delta: float = 0.05
     maximum_permutation_p_value: float = Field(default=0.1, gt=0, le=1)
+    minimum_test_class_count: int | None = Field(default=None, ge=1)
 
 
 class CaseSpec(StrictModel):
@@ -149,6 +154,15 @@ class CaseSpec(StrictModel):
         names = [scenario.name for scenario in self.generalization_scenarios]
         if not names or len(names) != len(set(names)):
             raise ValueError("generalization scenario names must be present and unique")
+        if self.thresholds.minimum_test_class_count is not None:
+            if self.task.kind != "binary_classification":
+                raise ValueError(
+                    "thresholds.minimum_test_class_count requires binary_classification"
+                )
+            if not self.evaluation.bootstrap_unit:
+                raise ValueError(
+                    "thresholds.minimum_test_class_count requires evaluation.bootstrap_unit"
+                )
         return self
 
     def fingerprint(self) -> str:
