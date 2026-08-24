@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0b0d0c" />
+    <meta
+      name="description"
+      content="Evidence-first capability audits for biological machine-learning claims. Test the claim before you train the expensive model."
+    />
+    <meta property="og:title" content="bio-ml-preflight — Test the claim before the model" />
+    <meta
+      property="og:description"
+      content="Audit leakage, generalization, stability, and the cheapest next evidence for biological ML."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://zhoudaxia233.github.io/bio-ml-preflight/" />
+    <meta
+      property="og:image"
+      content="https://zhoudaxia233.github.io/bio-ml-preflight/og.png"
+    />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="bio-ml-preflight — Test the claim. Then train the model."
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="bio-ml-preflight — Test the claim before the model" />
+    <meta
+      name="twitter:description"
+      content="Audit leakage, generalization, stability, and the cheapest next evidence for biological ML."
+    />
+    <meta
+      name="twitter:image"
+      content="https://zhoudaxia233.github.io/bio-ml-preflight/og.png"
+    />
+    <title>bio-ml-preflight — Test the claim before the model</title>
+    <link rel="stylesheet" href="./landing.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="site-header shell">
+      <a class="brand" href="#top" aria-label="bio-ml-preflight home">
+        <span class="brand-mark" aria-hidden="true">bp</span>
+        <span>bio-ml-preflight</span>
+      </a>
+      <nav aria-label="Primary navigation">
+        <a href="#method">Method</a>
+        <a href="#evidence">Evidence</a>
+        <a href="https://github.com/zhoudaxia233/bio-ml-preflight/blob/main/README.zh-CN.md"
+          >中文</a
+        >
+        <a class="nav-cta" href="https://github.com/zhoudaxia233/bio-ml-preflight"
+          >GitHub <span aria-hidden="true">↗</span></a
+        >
+      </nav>
+    </header>
+
+    <main id="main">
+      <section class="hero shell" id="top">
+        <div class="hero-copy">
+          <p class="eyebrow"><span></span> Evidence before architecture</p>
+          <h1>Test the claim.<br />Then train<br /><em>the model.</em></h1>
+          <p class="hero-lede">
+            Find out what your biological data can actually support—before a random split,
+            repeated entity, or unstable ranking turns into a confident conclusion.
+          </p>
+          <div class="hero-actions">
+            <a class="button primary" href="#start">Run the smoke test <span>→</span></a>
+            <a class="button quiet" href="#method">See how it works</a>
+          </div>
+          <div class="trust-row" aria-label="Project attributes">
+            <span>Open source</span>
+            <span>CPU-first</span>
+            <span>Split-aware</span>
+            <span>No magic score</span>
+          </div>
+        </div>
+
+        <div class="hero-instrument" aria-label="Example capability report">
+          <div class="instrument-glow" aria-hidden="true"></div>
+          <div class="instrument-topbar">
+            <span>CAPABILITY REPORT</span>
+            <span class="live"><i></i> COMPLETE</span>
+          </div>
+          <div class="instrument-body">
+            <p class="instrument-kicker">CASE / DAVIS PAIRWISE AFFINITY</p>
+            <div class="signal-line">
+              <span>Predict held-out pairs</span>
+              <strong>SUPPORTED</strong>
+            </div>
+            <div class="metric">
+              <span class="metric-label">Spearman</span>
+              <span class="metric-value">0.604</span>
+              <span class="metric-delta">+0.596 vs null</span>
+            </div>
+            <div class="scan" aria-hidden="true">
+              <span style="--h: 18%"></span><span style="--h: 28%"></span
+              ><span style="--h: 22%"></span><span style="--h: 46%"></span
+              ><span style="--h: 32%"></span><span style="--h: 62%"></span
+              ><span style="--h: 74%"></span><span style="--h: 68%"></span
+              ><span style="--h: 88%"></span><span style="--h: 78%"></span
+              ><span style="--h: 92%"></span><span style="--h: 84%"></span>
+            </div>
+            <div class="verdict-grid">
+              <div>
+                <span>Cold drug</span>
+                <strong class="limit">WITH LIMITS</strong>
+              </div>
+              <div>
+                <span>Cold target</span>
+                <strong>SUPPORTED</strong>
+              </div>
+              <div class="warning">
+                <span>Top-5 selection</span>
+                <strong>INSUFFICIENT</strong>
+              </div>
+            </div>
+            <p class="instrument-note">
+              Same dataset. Different claim. Different answer.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="statement">
+        <div class="shell statement-inner">
+          <p class="section-label">The uncomfortable truth</p>
+          <h2>A good metric can still support the <em>wrong conclusion.</em></h2>
+          <p>
+            Ten thousand measurements from ten patients are not ten thousand independent
+            samples. Similar RMSE values can hide completely different top candidates.
+            <strong>bio-ml-preflight makes the boundary visible.</strong>
+          </p>
+        </div>
+      </section>
+
+      <section class="method shell" id="method">
+        <div class="section-heading">
+          <p class="section-label">The preflight sequence</p>
+          <h2>Four checks before<br />you spend the compute.</h2>
+        </div>
+        <ol class="method-list">
+          <li>
+            <span class="step-number">01</span>
+            <div>
+              <h3>Define the claim</h3>
+              <p>Prediction unit, deployment population, generalization axis, decision rule.</p>
+            </div>
+            <span class="step-token">CLAIM.yaml</span>
+          </li>
+          <li>
+            <span class="step-number">02</span>
+            <div>
+              <h3>Audit the boundaries</h3>
+              <p>Repeated entities, target conflicts, suspicious IDs, batches, missing metadata.</p>
+            </div>
+            <span class="step-token">AUDIT</span>
+          </li>
+          <li>
+            <span class="step-number">03</span>
+            <div>
+              <h3>Challenge the split</h3>
+              <p>Random, grouped, cold-entity, time, and custom scenarios with persisted manifests.</p>
+            </div>
+            <span class="step-token">SPLIT × NULL</span>
+          </li>
+          <li>
+            <span class="step-number">04</span>
+            <div>
+              <h3>Get a bounded verdict</h3>
+              <p>Evidence for, evidence against, unmet assumptions, and the cheapest next evidence.</p>
+            </div>
+            <span class="step-token">REPORT</span>
+          </li>
+        </ol>
+      </section>
+
+      <section class="evidence" id="evidence">
+        <div class="shell evidence-grid">
+          <div class="evidence-copy">
+            <p class="section-label">A real preflight finding</p>
+            <h2>The predictor worked.<br />The selection rule didn’t.</h2>
+            <p>
+              On the Davis demo, the best lightweight baseline supported pairwise prediction.
+              But the top-5 candidate set changed too much across runs to support the downstream
+              selection claim.
+            </p>
+            <a href="https://github.com/zhoudaxia233/bio-ml-preflight#davis-demo"
+              >Inspect the reproducible demo <span>↗</span></a
+            >
+          </div>
+          <div class="evidence-board">
+            <div class="board-cell featured">
+              <span>PAIRWISE PREDICTION</span>
+              <strong>0.604</strong>
+              <p>median Spearman</p>
+              <b class="badge success">SUPPORTED</b>
+            </div>
+            <div class="board-cell">
+              <span>COLD-DRUG</span>
+              <strong>0.295</strong>
+              <p>median Spearman</p>
+              <b class="badge caution">WITH LIMITS</b>
+            </div>
+            <div class="board-cell wide">
+              <div>
+                <span>TOP-5 STABILITY</span>
+                <strong>0.487</strong>
+                <p>pairwise Jaccard</p>
+              </div>
+              <b class="badge danger">INSUFFICIENT EVIDENCE</b>
+            </div>
+            <p class="board-footnote">Local report artifact · transparent baselines · 9 null draws</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="capabilities shell">
+        <div class="section-heading compact">
+          <p class="section-label">Built for scientific friction</p>
+          <h2>Not another leaderboard.</h2>
+          <p>Every feature exists to make an overclaim harder.</p>
+        </div>
+        <div class="capability-grid">
+          <article class="capability-card tall">
+            <span class="card-index">A</span>
+            <div class="overlap-visual" aria-hidden="true">
+              <span></span><span></span><i>!</i>
+            </div>
+            <h3>Leakage has nowhere to hide.</h3>
+            <p>
+              Expose repeated patients, molecules, targets, pairs, exact records, and suspicious
+              identifiers before fitting.
+            </p>
+          </article>
+          <article class="capability-card purple">
+            <span class="card-index">B</span>
+            <p class="big-quote">“Supported” is not a vibe.</p>
+            <p>Every status carries the numbers, assumptions, and contrary evidence behind it.</p>
+          </article>
+          <article class="capability-card light">
+            <span class="card-index">C</span>
+            <h3>Ranking gets its own evidence.</h3>
+            <div class="rank-list" aria-label="Example unstable rank list">
+              <span><i>01</i> compound_017 <b>↑2</b></span>
+              <span><i>02</i> compound_204 <b class="down">↓1</b></span>
+              <span><i>03</i> compound_088 <b>↑5</b></span>
+            </div>
+          </article>
+          <article class="capability-card outline">
+            <span class="card-index">D</span>
+            <h3>Missing metadata stays missing.</h3>
+            <p>
+              No guessed batch. No invented biology. The affected question becomes explicitly
+              not assessable.
+            </p>
+            <span class="not-assessable">NOT_ASSESSABLE</span>
+          </article>
+          <article class="capability-card lime">
+            <span class="card-index">E</span>
+            <h3>Cheap evidence first.</h3>
+            <p>
+              Start with transparent CPU baselines and the smallest experiment that can change
+              the decision.
+            </p>
+            <span class="cost-arrow">LOW COST <i>→</i> HIGH INFORMATION</span>
+          </article>
+        </div>
+      </section>
+
+      <section class="start" id="start">
+        <div class="shell start-grid">
+          <div>
+            <p class="section-label">From checkout to evidence</p>
+            <h2>One command.<br />Four failure modes.</h2>
+            <p>
+              The synthetic smoke test covers stable signal, leakage, no signal, and ranking
+              instability—without a GPU.
+            </p>
+          </div>
+          <div class="terminal" aria-label="Quick-start command">
+            <div class="terminal-bar">
+              <span></span><span></span><span></span><b>preflight — zsh</b>
+            </div>
+            <pre><code><span>$</span> git clone https://github.com/zhoudaxia233/bio-ml-preflight.git
+<span>$</span> cd bio-ml-preflight
+<span>$</span> make demo
+
+<i>✓ stable signal</i>
+<i>✓ leakage trap detected</i>
+<i>✓ no-signal claim contradicted</i>
+<i>✓ ranking instability exposed</i></code></pre>
+            <div class="terminal-footer">Python 3.11+ · MIT · reports stay local</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="final-cta shell">
+        <p class="section-label">Before the next training run</p>
+        <h2>Ask a better first question.</h2>
+        <p>Not “Which model wins?” but “What can this evidence support?”</p>
+        <div class="hero-actions centered">
+          <a class="button primary" href="https://github.com/zhoudaxia233/bio-ml-preflight"
+            >Explore on GitHub <span>↗</span></a
+          >
+          <a class="button quiet" href="https://github.com/zhoudaxia233/bio-ml-preflight#quick-start"
+            >Read the docs</a
+          >
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer shell">
+      <a class="brand" href="#top"><span class="brand-mark" aria-hidden="true">bp</span></a>
+      <p>Evidence-first capability audits for biological machine learning.</p>
+      <div>
+        <a href="https://github.com/zhoudaxia233/bio-ml-preflight/blob/main/LICENSE">MIT</a>
+        <a href="https://github.com/zhoudaxia233/bio-ml-preflight">Source</a>
+        <a href="https://github.com/zhoudaxia233/bio-ml-preflight/issues">Issues</a>
+      </div>
+    </footer>
+  </body>
+</html>
