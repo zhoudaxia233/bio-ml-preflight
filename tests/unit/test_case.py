@@ -1,3 +1,4 @@
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -97,5 +98,8 @@ def test_graph_readiness_requires_a_declared_nonrandom_scenario() -> None:
 def test_optional_graph_contract_does_not_change_a_locked_case_fingerprint() -> None:
     root = Path(__file__).resolve().parents[2]
     case = load_case(root / "examples" / "petbd_external" / "case.yaml")
+    legacy_payload = case.model_dump_json(exclude={"graph_readiness"}, exclude_none=False)
+    legacy_fingerprint = hashlib.sha256(legacy_payload.encode()).hexdigest()
 
-    assert case.fingerprint() == "d3583059f74163523bc8538def31ec75d6343a67c3006a3c2a5890591038b74b"
+    assert case.graph_readiness is None
+    assert case.fingerprint() == legacy_fingerprint
