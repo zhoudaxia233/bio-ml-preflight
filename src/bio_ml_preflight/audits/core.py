@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
 
 import numpy as np
@@ -242,6 +244,146 @@ def apply_identity_conflict_policies(
     }
 
 
+def audit_graph_readiness_contract(
+    frame: pd.DataFrame,
+    case: CaseSpec,
+    identity_consistency: dict[str, Any],
+) -> dict[str, Any]:
+    """Validate a declared molecular-graph boundary without training a graph model."""
+    graph = case.graph_readiness
+    if graph is None:
+        return {"status": "NOT_DECLARED"}
+    converted_graphs = _canonical_molecular_graphs(frame[graph.structure_column])
+    if converted_graphs is None:
+        return {
+            "status": "NOT_ASSESSABLE",
+            "reason": "Graph construction audit requires: uv sync --extra chem",
+        }
+    canonical, atom_counts, bond_counts = converted_graphs
+    invalid_rows = sum(value is None for value in canonical)
+    if invalid_rows:
+        raise ValueError(
+            f"graph_readiness found {invalid_rows} invalid structures under the error policy"
+        )
+
+    unit = graph.independent_unit_column
+    target = case.task.target_column
+    converted = pd.DataFrame(
+        {
+            "unit": frame[unit].astype(str),
+            "target": frame[target],
+            "canonical_graph": canonical,
+            "atom_count": atom_counts,
+            "bond_count": bond_counts,
+        }
+    )
+    graphs_per_unit = converted.groupby("unit", dropna=False)["canonical_graph"].nunique()
+    targets_per_unit = converted.groupby("unit", dropna=False)["target"].nunique()
+    support = converted.drop_duplicates("unit")
+    class_counts = {
+        str(label): int(count)
+        for label, count in support["target"].value_counts().sort_index().items()
+    }
+    minimum = graph.minimum_independent_units_per_class
+    enough_support = len(class_counts) == 2 and min(class_counts.values()) >= minimum
+    graph_conflicts = int((graphs_per_unit > 1).sum())
+    target_conflicts = int((targets_per_unit > 1).sum())
+    identity_status = str(identity_consistency["status"])
+    requirements_met = (
+        identity_status in {"NO_CONFLICTS", "RESOLVED"}
+        and graph_conflicts == 0
+        and target_conflicts == 0
+        and enough_support
+    )
+    identity_pairs = sorted(set(zip(converted["unit"], converted["canonical_graph"], strict=True)))
+    fingerprint = hashlib.sha256(
+        json.dumps(identity_pairs, separators=(",", ":")).encode()
+    ).hexdigest()
+    shared_graphs = (
+        converted.drop_duplicates(["unit", "canonical_graph"])
+        .groupby("canonical_graph")["unit"]
+        .nunique()
+    )
+    metadata = {
+        "replicate": any(
+            column in frame
+            for column in [case.metadata.replicate_id, case.metadata.biological_replicate_id]
+            if column
+        ),
+        "batch": bool(case.metadata.batch_id and case.metadata.batch_id in frame),
+        "time": bool(case.metadata.time_column and case.metadata.time_column in frame),
+        "treatment": bool(
+            case.metadata.treatment_column and case.metadata.treatment_column in frame
+        ),
+    }
+    scenarios = {scenario.name: scenario for scenario in case.generalization_scenarios}
+    return {
+        "status": "VALID_CONTRACT" if requirements_met else "UNMET_REQUIREMENTS",
+        "construction": graph.construction,
+        "scope": graph.scope,
+        "structure_column": graph.structure_column,
+        "graph_identity": graph.graph_identity,
+        "invalid_structure_policy": graph.invalid_structure_policy,
+        "node_features": graph.node_features,
+        "edge_features": graph.edge_features,
+        "rows_converted": len(converted),
+        "invalid_structure_rows": invalid_rows,
+        "unique_independent_units": int(converted["unit"].nunique()),
+        "unique_canonical_graphs": int(converted["canonical_graph"].nunique()),
+        "topology": {
+            "atom_count": _distribution(converted["atom_count"]),
+            "bond_count": _distribution(converted["bond_count"]),
+        },
+        "independent_units_with_multiple_graphs": graph_conflicts,
+        "independent_units_with_conflicting_targets": target_conflicts,
+        "canonical_graphs_shared_across_independent_units": int((shared_graphs > 1).sum()),
+        "conversion_fingerprint": fingerprint,
+        "identity_consistency_status": identity_status,
+        "support": {
+            "unit": unit,
+            "class_counts": class_counts,
+            "minimum_independent_units_per_class": minimum,
+            "meets_minimum": enough_support,
+            "interpretation": (
+                "Counts are transparent support proxies, not exact effective sample sizes."
+            ),
+        },
+        "evaluation_scenarios": [
+            {"name": name, "strategy": scenarios[name].strategy}
+            for name in graph.evaluation_scenarios
+        ],
+        "metadata_available": metadata,
+        "metadata_limit": (
+            "Missing measurement or deployment metadata remains an evidence limit; graph "
+            "construction does not repair it."
+        ),
+    }
+
+
+def _canonical_molecular_graphs(
+    values: pd.Series,
+) -> tuple[list[str | None], list[int | None], list[int | None]] | None:
+    try:
+        from rdkit import Chem, rdBase
+    except ImportError:
+        return None
+    canonical: list[str | None] = []
+    atom_counts: list[int | None] = []
+    bond_counts: list[int | None] = []
+    with rdBase.BlockLogs():
+        for value in values:
+            molecule = Chem.MolFromSmiles(str(value))
+            if molecule is None or molecule.GetNumAtoms() == 0:
+                canonical.append(None)
+                atom_counts.append(None)
+                bond_counts.append(None)
+                continue
+            canonical.append(Chem.MolToSmiles(molecule, canonical=True, isomericSmiles=True))
+            atom_counts.append(int(molecule.GetNumAtoms()))
+            bond_counts.append(int(molecule.GetNumBonds()))
+    return canonical, atom_counts, bond_counts
+
+
 def _aggregate_conflicting_targets(
     frame: pd.DataFrame,
     case: CaseSpec,
@@ -394,7 +536,7 @@ def audit_overlap(
     exact_hash_columns = case.data.fingerprint_columns or list(frame.columns)
     train_hash = set(pd.util.hash_pandas_object(train[exact_hash_columns], index=False))
     test_hash = set(pd.util.hash_pandas_object(test[exact_hash_columns], index=False))
-    return {
+    result: dict[str, Any] = {
         "train_rows": len(train),
         "test_rows": len(test),
         "exact_duplicate_overlap": len(train_hash & test_hash),
@@ -405,3 +547,21 @@ def audit_overlap(
             "reason": "No similarity function was configured.",
         },
     }
+    graph = case.graph_readiness
+    if graph is not None:
+        converted = _canonical_molecular_graphs(frame[graph.structure_column])
+        if converted is None:
+            result["canonical_graph_overlap"] = {
+                "status": "NOT_ASSESSABLE",
+                "reason": "Graph overlap audit requires: uv sync --extra chem",
+            }
+        else:
+            canonical = converted[0]
+            train_graphs = {canonical[index] for index in train_indices}
+            test_graphs = {canonical[index] for index in test_indices}
+            overlap = train_graphs & test_graphs
+            result["canonical_graph_overlap"] = {
+                "count": len(overlap),
+                "test_fraction": len(overlap) / max(len(test_graphs), 1),
+            }
+    return result

@@ -56,6 +56,17 @@ thresholds:
   maximum_dispersion: 0.15
   minimum_permutation_delta: 0.05
   maximum_permutation_p_value: 0.1
+graph_readiness:
+  construction: rdkit_smiles_2d
+  structure_column: smiles
+  graph_identity: canonical_isomeric_smiles
+  independent_unit_column: compound_id
+  scope: 2d
+  node_features: [atomic_number, degree, formal_charge, chirality, aromaticity, hybridization]
+  edge_features: [bond_type, conjugation, ring_membership, stereo]
+  invalid_structure_policy: error
+  evaluation_scenarios: [scaffold_generalization]
+  minimum_independent_units_per_class: 20
 role_confirmation:
   target: true
   prediction_unit: true

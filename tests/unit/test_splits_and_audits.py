@@ -5,9 +5,11 @@ import pytest
 from bio_ml_preflight.audits import (
     apply_identity_conflict_policies,
     audit_dataset,
+    audit_graph_readiness_contract,
     audit_overlap,
 )
 from bio_ml_preflight.cli import synthetic_case
+from bio_ml_preflight.contracts import CaseSpec
 from bio_ml_preflight.contracts.case import EntitySpec, ScenarioSpec
 from bio_ml_preflight.data.synthetic import generate_synthetic
 from bio_ml_preflight.runner import _test_target_counts, run_case
@@ -247,3 +249,59 @@ def test_binary_class_support_counts_independent_units_not_rows(tmp_path) -> Non
 
     assert counts == {"0": 1, "1": 1}
     assert unit == "compound_id"
+
+
+def test_graph_readiness_contract_is_deterministic_and_counts_independent_support() -> None:
+    pytest.importorskip("rdkit")
+    frame = pd.DataFrame(
+        {
+            "compound_id": ["a", "b", "c"],
+            "smiles": ["CCO", "CCO", "CN"],
+            "y": [0, 0, 1],
+        }
+    )
+    case = CaseSpec.model_validate(
+        {
+            "schema_version": 1,
+            "case_id": "graph-contract",
+            "data": {"path": "unused.parquet"},
+            "task": {
+                "kind": "binary_classification",
+                "prediction_unit": "compound",
+                "target_column": "y",
+            },
+            "entities": {
+                "compound": {
+                    "id_column": "compound_id",
+                    "representation_column": "smiles",
+                    "identity_conflict_policy": "exclude",
+                }
+            },
+            "features": {"include": ["smiles"], "smiles_column": "smiles"},
+            "generalization_scenarios": [
+                {"name": "scaffold", "strategy": "scaffold", "group_column": "smiles"}
+            ],
+            "evaluation": {"bootstrap_unit": "compound_id"},
+            "graph_readiness": {
+                "structure_column": "smiles",
+                "independent_unit_column": "compound_id",
+                "node_features": ["atomic_number", "formal_charge"],
+                "edge_features": ["bond_type"],
+                "evaluation_scenarios": ["scaffold"],
+                "minimum_independent_units_per_class": 1,
+            },
+        }
+    )
+
+    first = audit_graph_readiness_contract(frame, case, {"status": "NO_CONFLICTS"})
+    second = audit_graph_readiness_contract(frame, case, {"status": "NO_CONFLICTS"})
+
+    assert first == second
+    assert first["status"] == "VALID_CONTRACT"
+    assert first["support"]["class_counts"] == {"0": 2, "1": 1}
+    assert first["canonical_graphs_shared_across_independent_units"] == 1
+
+    invalid = frame.copy()
+    invalid.loc[0, "smiles"] = ""
+    with pytest.raises(ValueError, match="invalid structures"):
+        audit_graph_readiness_contract(invalid, case, {"status": "NO_CONFLICTS"})

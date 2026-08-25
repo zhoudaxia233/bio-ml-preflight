@@ -77,6 +77,18 @@ The smoke comparison reuses four checksummed manifests and the same logistic/ext
 
 The v0.1 ladder stops there. A learned graph representation belongs behind the same feature-frame/evaluation seam only when fixed character/Morgan baselines fail a decision-relevant boundary, enough independent compounds exist to fit it without leakage, and a locked external validation can justify the added model class.
 
+## Graph-model readiness gate
+
+The BBB case now declares a deterministic 2D molecular-graph contract without adding a GNN framework. It fixes canonical graph identity, node/edge features, invalid-structure handling, the independent unit, a case-specific class-support floor, and scaffold validation. The audit also checks canonical-graph—not only compound-ID—overlap on every selected manifest.
+
+```bash
+uv run bio-ml-preflight assess-graph-readiness reports/bbb-martins \
+  --external-report reports/petbd-external-confirmation \
+  --output reports/bbb-graph-readiness
+```
+
+This command reads existing JSON and Parquet artifacts; it does not refit a baseline or access the PETBD holdout again. For the current artifacts, all 2,006 development compounds convert to 1,955 canonical graphs, both scaffold manifests have zero canonical-graph overlap and at least 104 negative test compounds, and character/Morgan baselines keep the same `SUPPORTED` verdict. The adequately supported PETBD confirmation does not separate from permutation. The combined verdict is therefore `NOT_JUSTIFIED_BY_CURRENT_EVIDENCE`, not a claim that GNNs can never work: current evidence does not identify fixed molecular representation as the limiting boundary. Random-compound splits contain 23 and 18 overlapping canonical graphs and are excluded from graph-readiness evidence.
+
 ## Locked B3DB post-release confirmation
 
 The confirmatory demo freezes the development-selected Morgan representation and logistic probe before evaluating B3DB's 175 post-release records. The adapter pins and checksums the official source, derives comparable RDKit InChIKeys, and removes 10 matching identities from BBB_Martins development while retaining the entire external set. A supplied manifest then contains 1,992 training rows and 175 holdout rows with zero compound overlap. The holdout ledger is keyed by the dataset checksum and records the case fingerprint for every access, so changing the report output or case parameters cannot bypass the one-access limit.
@@ -102,7 +114,7 @@ uv run bio-ml-preflight autoprobe evaluate runs/example/candidate.yaml
 
 A dataset adapter normalizes a source into a DataFrame/Parquet table, records source/version/retrieval/checksum metadata, and returns columns referenced by the same `CaseSpec`; `data/davis.py` is the working example. A future AnnData or LINCS L1000 adapter would do that normalization without changing audits or split contracts. A multi-output gene-expression task would extend target validation and metric aggregation (per-gene, per-cell type, and decision-weighted summaries) while retaining the same independent-unit, split-manifest, holdout, provenance, and capability contracts.
 
-DataSAIL is a future optional split provider: its assignment can be normalized into the existing persisted manifest and evaluated by the same overlap audit. It is intentionally not a v0.1 dependency. Physicochemical descriptors and GNNs are likewise omitted from the base ladder until they answer a distinct scientific question that character hashes and Morgan fingerprints cannot.
+DataSAIL is a future optional split provider: its assignment can be normalized into the existing persisted manifest and evaluated by the same overlap audit. It is intentionally not a v0.1 dependency. Physicochemical descriptors and GNN training are likewise omitted from the base ladder until the graph-readiness evidence identifies a distinct scientific question that character hashes and Morgan fingerprints cannot answer.
 
 ## Development
 

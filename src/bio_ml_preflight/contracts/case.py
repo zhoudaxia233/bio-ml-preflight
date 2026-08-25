@@ -55,6 +55,36 @@ class FeatureSpec(StrictModel):
         return self
 
 
+class MolecularGraphReadinessSpec(StrictModel):
+    construction: Literal["rdkit_smiles_2d"] = "rdkit_smiles_2d"
+    structure_column: str
+    graph_identity: Literal["canonical_isomeric_smiles"] = "canonical_isomeric_smiles"
+    independent_unit_column: str
+    scope: Literal["2d"] = "2d"
+    node_features: list[
+        Literal[
+            "atomic_number",
+            "degree",
+            "formal_charge",
+            "chirality",
+            "aromaticity",
+            "hybridization",
+        ]
+    ]
+    edge_features: list[Literal["bond_type", "conjugation", "ring_membership", "stereo"]]
+    invalid_structure_policy: Literal["error"] = "error"
+    evaluation_scenarios: list[str]
+    minimum_independent_units_per_class: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def lists_are_present_and_unique(self) -> MolecularGraphReadinessSpec:
+        for name in ("node_features", "edge_features", "evaluation_scenarios"):
+            values = getattr(self, name)
+            if not values or len(values) != len(set(values)):
+                raise ValueError(f"graph_readiness.{name} must be present and unique")
+        return self
+
+
 class MetadataSpec(StrictModel):
     replicate_id: str | None = None
     biological_replicate_id: str | None = None
@@ -149,6 +179,7 @@ class CaseSpec(StrictModel):
     evaluation: EvaluationSpec = Field(default_factory=EvaluationSpec)
     holdout: HoldoutSpec = Field(default_factory=HoldoutSpec)
     thresholds: ThresholdSpec = Field(default_factory=ThresholdSpec)
+    graph_readiness: MolecularGraphReadinessSpec | None = None
     role_confirmation: dict[str, bool] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -165,10 +196,50 @@ class CaseSpec(StrictModel):
                 raise ValueError(
                     "thresholds.minimum_test_class_count requires evaluation.bootstrap_unit"
                 )
+        if self.graph_readiness is not None:
+            graph = self.graph_readiness
+            if self.task.kind != "binary_classification":
+                raise ValueError("graph_readiness currently requires binary_classification")
+            if graph.structure_column != self.features.smiles_column:
+                raise ValueError(
+                    "graph_readiness.structure_column must match features.smiles_column"
+                )
+            entities = {entity.id_column: entity for entity in self.entities.values()}
+            entity = entities.get(graph.independent_unit_column)
+            if entity is None:
+                raise ValueError(
+                    "graph_readiness.independent_unit_column must be a declared entity ID"
+                )
+            if entity.representation_column != graph.structure_column:
+                raise ValueError(
+                    "graph_readiness.structure_column must be the independent entity's "
+                    "representation_column"
+                )
+            if entity.identity_conflict_policy is None:
+                raise ValueError("graph_readiness requires an explicit identity_conflict_policy")
+            if self.evaluation.bootstrap_unit != graph.independent_unit_column:
+                raise ValueError(
+                    "graph_readiness.independent_unit_column must match evaluation.bootstrap_unit"
+                )
+            scenarios = {scenario.name: scenario for scenario in self.generalization_scenarios}
+            unknown = sorted(set(graph.evaluation_scenarios) - set(scenarios))
+            if unknown:
+                raise ValueError(f"graph_readiness.evaluation_scenarios are unknown: {unknown}")
+            random_only = [
+                name
+                for name in graph.evaluation_scenarios
+                if scenarios[name].strategy in {"random", "random_pair"}
+            ]
+            if random_only:
+                raise ValueError(
+                    "graph_readiness.evaluation_scenarios cannot use random diagnostic splits: "
+                    f"{random_only}"
+                )
         return self
 
     def fingerprint(self) -> str:
-        payload = self.model_dump_json(exclude_none=False)
+        exclude = {"graph_readiness"} if self.graph_readiness is None else None
+        payload = self.model_dump_json(exclude=exclude, exclude_none=False)
         return hashlib.sha256(payload.encode()).hexdigest()
 
 

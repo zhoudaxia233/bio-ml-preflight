@@ -77,6 +77,18 @@ make demo-bbb
 
 v0.1 不加入 GNN。只有当字符/Morgan 基线在决策相关边界上失败、独立化合物数量足以无泄漏训练图模型，并且存在锁定外部验证时，才值得沿现有特征与评估接口增加学习式图表示。
 
+## 图模型就绪门
+
+BBB case 现在包含严格的二维分子图契约，但不引入 GNN 框架。契约固定规范图身份、节点/边特征、无效结构策略、独立单位、case 专用类别支持下限和 scaffold 验证；审计还会检查每个选定切分中的规范图重叠，而不只检查化合物 ID。
+
+```bash
+uv run bio-ml-preflight assess-graph-readiness reports/bbb-martins \
+  --external-report reports/petbd-external-confirmation \
+  --output reports/bbb-graph-readiness
+```
+
+该命令只读取已有 JSON 与 Parquet，不重新拟合基线，也不会再次访问 PETBD holdout。当前产物中，2,006 个开发化合物全部可转换为 1,955 个规范图；两个 scaffold manifest 的规范图重叠均为 0，测试折至少含 104 个阴性化合物；字符/Morgan 基线的能力结论都保持 `SUPPORTED`。与此同时，类别支持充分的 PETBD 确认没有脱离置换分布。因此综合结论为 `NOT_JUSTIFIED_BY_CURRENT_EVIDENCE`：这不是说 GNN 永远无效，而是现有证据没有把固定分子表示识别为主要瓶颈。随机化合物切分分别有 23 和 18 个规范图重叠，不能作为图模型就绪证据。
+
 ## 跑锁定的 B3DB 发布后确认
 
 该 Demo 在查看外部模型结果前锁定 BBB_Martins 开发阶段选出的 Morgan 表示与 logistic 模型。适配器固定并校验 B3DB 官方源码，用 RDKit InChIKey 统一身份，并从开发集移除与 175 条发布后记录重合的 10 个化合物，同时保留完整外部集。最终 supplied manifest 含 1,992 条训练记录和 175 条 holdout 记录，化合物重叠为 0；访问账本按数据校验和固定，并为每次访问记录 case 指纹，因此更换输出目录或 case 参数也不能绕过单次访问限制。

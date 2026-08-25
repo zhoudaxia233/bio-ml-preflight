@@ -12,6 +12,7 @@ import pandas as pd
 from bio_ml_preflight.audits import (
     apply_identity_conflict_policies,
     audit_dataset,
+    audit_graph_readiness_contract,
     audit_overlap,
 )
 from bio_ml_preflight.contracts import CaseSpec
@@ -64,6 +65,10 @@ def run_case(
     _validate_columns(frame, case)
     audits = audit_dataset(frame, case)
     audits["identity_consistency"] = identity_consistency
+    if case.graph_readiness is not None:
+        audits["graph_readiness_contract"] = audit_graph_readiness_contract(
+            frame, case, identity_consistency
+        )
     feature_frames = build_feature_frames(frame, case)
     target = frame[case.task.target_column].to_numpy()
     output.mkdir(parents=True, exist_ok=True)
@@ -671,6 +676,13 @@ def _ranking_candidate_column(
 def _validate_columns(frame: pd.DataFrame, case: CaseSpec) -> None:
     required = {case.task.target_column}
     required.update(entity.id_column for entity in case.entities.values())
+    if case.graph_readiness is not None:
+        required.update(
+            {
+                case.graph_readiness.structure_column,
+                case.graph_readiness.independent_unit_column,
+            }
+        )
     if case.thresholds.minimum_test_class_count is not None:
         assert case.evaluation.bootstrap_unit is not None
         required.add(case.evaluation.bootstrap_unit)

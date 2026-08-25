@@ -29,6 +29,10 @@ from bio_ml_preflight.data.davis import load_davis
 from bio_ml_preflight.data.synthetic import SyntheticKind, generate_synthetic
 from bio_ml_preflight.discovery import discover_tasks
 from bio_ml_preflight.discovery.cards import infer_roles
+from bio_ml_preflight.evaluation.graph_readiness import (
+    assess_graph_readiness,
+    write_graph_readiness,
+)
 from bio_ml_preflight.runner import run_case
 
 app = typer.Typer(no_args_is_help=True, help="Audit evidence boundaries for biological ML claims.")
@@ -133,6 +137,20 @@ def discover_command(
     """Generate reviewable analysis claim cards without biological invention."""
     payload = discover_tasks(data_path, output)
     typer.echo(f"Wrote {len(payload['claim_cards'])} provisional claim cards to {output}")
+
+
+@app.command("assess-graph-readiness")
+def assess_graph_readiness_command(
+    development_report: Annotated[Path, typer.Argument(exists=True, file_okay=False)],
+    external_report: Annotated[
+        Path | None, typer.Option("--external-report", exists=True, file_okay=False)
+    ] = None,
+    output: Annotated[Path, typer.Option("--output", "-o")] = Path("reports/graph-readiness"),
+) -> None:
+    """Decide whether existing evidence justifies one bounded graph-model probe."""
+    result = assess_graph_readiness(development_report, external_report)
+    write_graph_readiness(result, output)
+    typer.echo(f"{result['status']}: {result['cheapest_next_evidence']}")
 
 
 @demo_app.command("synthetic")

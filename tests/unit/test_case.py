@@ -58,3 +58,44 @@ def test_minimum_test_class_count_requires_an_independent_unit() -> None:
 
     with pytest.raises(ValidationError, match="evaluation.bootstrap_unit"):
         CaseSpec.model_validate(payload)
+
+
+def test_graph_readiness_requires_a_declared_nonrandom_scenario() -> None:
+    payload = {
+        "schema_version": 1,
+        "case_id": "molecule",
+        "data": {"path": "data.csv"},
+        "task": {
+            "kind": "binary_classification",
+            "prediction_unit": "compound",
+            "target_column": "y",
+        },
+        "entities": {
+            "compound": {
+                "id_column": "compound_id",
+                "representation_column": "smiles",
+                "identity_conflict_policy": "exclude",
+            }
+        },
+        "features": {"include": ["smiles"], "smiles_column": "smiles"},
+        "generalization_scenarios": [{"name": "random", "strategy": "random"}],
+        "evaluation": {"bootstrap_unit": "compound_id"},
+        "graph_readiness": {
+            "structure_column": "smiles",
+            "independent_unit_column": "compound_id",
+            "node_features": ["atomic_number"],
+            "edge_features": ["bond_type"],
+            "evaluation_scenarios": ["random"],
+            "minimum_independent_units_per_class": 1,
+        },
+    }
+
+    with pytest.raises(ValidationError, match="random diagnostic"):
+        CaseSpec.model_validate(payload)
+
+
+def test_optional_graph_contract_does_not_change_a_locked_case_fingerprint() -> None:
+    root = Path(__file__).resolve().parents[2]
+    case = load_case(root / "examples" / "petbd_external" / "case.yaml")
+
+    assert case.fingerprint() == "d3583059f74163523bc8538def31ec75d6343a67c3006a3c2a5890591038b74b"
