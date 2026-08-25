@@ -61,6 +61,17 @@ uv run --python 3.11 bio-ml-preflight run examples/davis/case.yaml --budget stan
 
 下载的数据在 gitignored 的 `data/cache/`，不会提交到仓库。
 
+## 跑 UCI Parkinsons Telemonitoring 公共数据 Demo
+
+[UCI Parkinsons Telemonitoring](https://archive.ics.uci.edu/dataset/189/parkinson)
+包含 42 名参与者的 5,875 次居家语音记录，采用 CC BY 4.0 许可；适配器用校验和固定官方压缩包。case 只用官方声明的 16 个语音测量预测线性插值的 `motor_UPDRS`，年龄、性别、记录时间和 `total_UPDRS` 仅保留为审计上下文，不会悄悄进入模型。
+
+```bash
+uv run bio-ml-preflight demo parkinsons --budget smoke
+```
+
+smoke 结果清楚显示了独立单位边界。随机记录诊断的 Spearman 中位数为 `0.599`（置换差值 `0.237`、经验 p 值 `0.10`），但 42 名参与者全部同时出现在训练和测试中，因此只能判为 `SUPPORTED_WITH_LIMITS`，不能作为未见参与者或独立记录时点的证据。源数据只有 2,501 个精确的“参与者—时间”代理组，5,875 条记录中有 4,904 条属于重复代理组。两个按参与者整组留出的 smoke 切分均无参与者重叠，Spearman 中位数降至 `0.195`，置换差值 `0.070`、p 值 `0.30`、跨切分标准差 `0.158`；报告会同时记录这三项限制，结论为 `INSUFFICIENT_EVIDENCE`。测量可靠性与批次混杂仍为 `NOT_ASSESSABLE`。这是回顾性结果，不证明未来时间外推、临床效用或因果效应。
+
 ## 跑 BBB_Martins 分子二分类 Demo
 
 使用 SMILES 预测二分类 BBB 标签，并比较随机化合物与 scaffold 隔离验证：

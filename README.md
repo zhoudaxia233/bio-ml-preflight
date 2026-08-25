@@ -63,6 +63,30 @@ uv run bio-ml-preflight run examples/davis/case.yaml --budget standard
 
 The case compares random-pair, cold-drug, and cold-target splits. Davis is public, so any local “holdout” is pseudo-sealed, not truly blinded.
 
+## UCI Parkinsons Telemonitoring demo
+
+The [UCI Parkinsons Telemonitoring dataset](https://archive.ics.uci.edu/dataset/189/parkinson)
+contains 5,875 home voice recordings from 42 participants. The adapter pins the official
+CC BY 4.0 archive by checksum. The case predicts the official, linearly interpolated
+`motor_UPDRS` target from the 16 declared voice measurements only; age, sex, recording time,
+and `total_UPDRS` remain audit context rather than predictors.
+
+```bash
+uv run bio-ml-preflight demo parkinsons --budget smoke
+```
+
+The smoke run makes the independence boundary visible. A random-record diagnostic reached
+median Spearman `0.599` (permutation delta `0.237`, empirical p-value `0.10`), but all 42
+participants appeared on both sides of those splits. It is therefore
+`SUPPORTED_WITH_LIMITS`, not evidence for unseen participants or independent recording
+occasions. The source has only 2,501 exact participant-time proxies, with 4,904 of 5,875
+records belonging to repeated proxies. Across two participant-grouped smoke splits, participant
+overlap was zero and median Spearman fell to `0.195`, with permutation delta `0.070`, p-value
+`0.30`, and across-split standard deviation `0.158`; all three limitations are recorded and the
+verdict is `INSUFFICIENT_EVIDENCE`. Measurement reliability and batch confounding remain
+`NOT_ASSESSABLE`. This retrospective result does not establish future-time transport, clinical
+utility, or a causal effect.
+
 ## BBB_Martins molecular-classification demo
 
 This second TDC demo predicts a binary BBB label from SMILES and compares a random-compound diagnostic with scaffold-separated validation. Its case explicitly excludes the 12 compound identifiers with conflicting labels or inconsistent SMILES (24 rows) before splitting, and records that policy in every report.

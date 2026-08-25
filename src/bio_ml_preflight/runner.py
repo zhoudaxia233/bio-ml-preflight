@@ -65,6 +65,12 @@ def run_case(
     _validate_columns(frame, case)
     audits = audit_dataset(frame, case)
     audits["identity_consistency"] = identity_consistency
+    source_record_path = data_path.parent / "source.json"
+    dataset_source = (
+        json.loads(source_record_path.read_text(encoding="utf-8"))
+        if source_record_path.is_file()
+        else {}
+    )
     if case.graph_readiness is not None:
         audits["graph_readiness_contract"] = audit_graph_readiness_contract(
             frame, case, identity_consistency
@@ -348,6 +354,7 @@ def run_case(
     structured = {
         "schema_version": 1,
         "case": case.model_dump(mode="json"),
+        "dataset_source": dataset_source,
         "audits": audits,
         "split_overlap": overlap_results,
         "experiment_summary": _experiment_summary(experiments, case.evaluation.primary_metric),

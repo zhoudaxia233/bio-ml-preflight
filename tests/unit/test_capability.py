@@ -202,3 +202,145 @@ def test_small_external_minority_class_blocks_confirmation(tmp_path) -> None:
     assert row["numbers"]["test_class_count_unit"] == "compound_id"
     assert row["numbers"]["minimum_test_class_count_required"] == 20
     assert "at least 16" in row["cheapest_next_evidence"]
+
+
+def test_adequately_supported_holdout_with_weak_permutation_targets_new_boundary(
+    tmp_path,
+) -> None:
+    case = synthetic_case("no_signal", tmp_path / "x.parquet")
+    case.task.kind = "binary_classification"
+    case.evaluation.primary_metric = "balanced_accuracy"
+    case.thresholds.supported_metric = 0.65
+    case.thresholds.limited_metric = 0.55
+    case.thresholds.minimum_test_class_count = 20
+    case.holdout.enabled = True
+    case.generalization_scenarios = [
+        ScenarioSpec(
+            name="external",
+            strategy="supplied",
+            split_column="validation_split",
+            group_column="compound_id",
+        )
+    ]
+    experiments = pd.DataFrame(
+        [
+            {
+                "scenario": "external",
+                "strategy": "supplied",
+                "model": "logistic",
+                "permuted": False,
+                "permutation_draw": None,
+                "balanced_accuracy": 0.572,
+            },
+            *[
+                {
+                    "scenario": "external",
+                    "strategy": "supplied",
+                    "model": "logistic",
+                    "permuted": True,
+                    "permutation_draw": draw,
+                    "balanced_accuracy": score,
+                }
+                for draw, score in enumerate(
+                    [0.543, 0.563, 0.515, 0.438, 0.593, 0.584, 0.425, 0.469, 0.458]
+                )
+            ],
+        ]
+    )
+    overlap = {
+        "external:11": {
+            "test_target_counts": {"0": 37, "1": 500},
+            "test_target_count_unit": "compound_id",
+            "exact_duplicate_overlap": 0,
+            "pair_overlap": 0,
+            "entity_overlap": {"compound": {"count": 0, "test_fraction": 0.0}},
+        }
+    }
+
+    row = capability_matrix(experiments, case, {}, audits={}, overlap_results=overlap)[0]
+
+    assert row["status"] == "INSUFFICIENT_EVIDENCE"
+    assert row["numbers"]["permutation_p_value"] == 0.3
+    assert row["numbers"]["permutation_delta"] > 0.05
+    assert any("Delta over" in value for value in row["evidence_supporting"])
+    assert any("p=0.300" in value for value in row["evidence_against"])
+    assert not any("p=0.300" in value for value in row["evidence_supporting"])
+    assert any("Both holdout classes meet" in value for value in row["evidence_supporting"])
+    assert "target and measurement boundary" in row["cheapest_next_evidence"]
+    assert "new untouched confirmation set" in row["cheapest_next_evidence"]
+    assert "repeat the fixed validation" not in row["cheapest_next_evidence"]
+    assert "Add independent units" not in row["cheapest_next_evidence"]
+
+
+def test_low_unstable_baseline_and_weak_permutation_are_all_opposing(tmp_path) -> None:
+    case = synthetic_case("no_signal", tmp_path / "x.parquet")
+    case.thresholds.limited_metric = 0.2
+    case.thresholds.maximum_dispersion = 0.15
+    case.thresholds.minimum_permutation_delta = 0.05
+    case.thresholds.maximum_permutation_p_value = 0.1
+    case.generalization_scenarios = [
+        ScenarioSpec(name="unseen_participant", strategy="group", group_column="subject_id")
+    ]
+    experiments = pd.DataFrame(
+        [
+            {
+                "scenario": "unseen_participant",
+                "strategy": "group",
+                "model": "extra_trees",
+                "permuted": False,
+                "permutation_draw": None,
+                "spearman": score,
+            }
+            for score in [0.307, 0.083]
+        ]
+        + [
+            {
+                "scenario": "unseen_participant",
+                "strategy": "group",
+                "model": "extra_trees",
+                "permuted": True,
+                "permutation_draw": draw,
+                "spearman": score,
+            }
+            for draw, score in enumerate([0.05, 0.08, 0.10, 0.12, 0.125, 0.15, 0.18, 0.20, 0.25])
+        ]
+    )
+
+    row = capability_matrix(experiments, case, {}, audits={}, overlap_results={})[0]
+
+    assert row["status"] == "INSUFFICIENT_EVIDENCE"
+    assert row["numbers"]["permutation_p_value"] == 0.3
+    assert any("median spearman=0.195" in value for value in row["evidence_against"])
+    assert not any("median spearman=0.195" in value for value in row["evidence_supporting"])
+    assert "Permutation separation is insufficient." in row["unmet_assumptions"]
+    assert (
+        "The controlled baseline is below the configured useful metric." in row["unmet_assumptions"]
+    )
+    assert "Performance is unstable across the evaluated splits." in row["unmet_assumptions"]
+
+
+def test_random_split_repeating_bootstrap_units_caps_support(tmp_path) -> None:
+    case = synthetic_case("no_signal", tmp_path / "x.parquet")
+    case.entities = {"participant": EntitySpec(id_column="subject_id")}
+    case.evaluation.bootstrap_unit = "subject_id"
+    case.generalization_scenarios = [ScenarioSpec(name="random_record", strategy="random")]
+    overlap = {
+        "random_record:11": {
+            "exact_duplicate_overlap": 0,
+            "pair_overlap": 0,
+            "entity_overlap": {"participant": {"count": 42, "test_fraction": 1.0}},
+        }
+    }
+
+    row = capability_matrix(
+        _supported_experiments("random_record", "random"),
+        case,
+        {},
+        audits={},
+        overlap_results=overlap,
+    )[0]
+
+    assert row["status"] == "SUPPORTED_WITH_LIMITS"
+    assert row["numbers"]["bootstrap_unit_overlap_count"] == 42
+    assert any("repeats 42 subject_id" in value for value in row["evidence_against"])
+    assert "subject_id held out" in row["cheapest_next_evidence"]

@@ -26,6 +26,7 @@ from bio_ml_preflight.data.bbb import (
     load_petbd_external_confirmation,
 )
 from bio_ml_preflight.data.davis import load_davis
+from bio_ml_preflight.data.parkinsons import load_parkinsons_telemonitoring
 from bio_ml_preflight.data.synthetic import SyntheticKind, generate_synthetic
 from bio_ml_preflight.discovery import discover_tasks
 from bio_ml_preflight.discovery.cards import infer_roles
@@ -194,6 +195,22 @@ def demo_bbb(
     data_path = root / "data" / "cache" / "bbb_martins" / "bbb_martins.parquet"
     load_bbb_martins(data_path.parent)
     case = load_case(root / "examples" / "bbb_martins" / "case.yaml")
+    result = run_case(case, output, budget=budget)
+    typer.echo(_status_summary(result))
+
+
+@demo_app.command("parkinsons")
+def demo_parkinsons(
+    budget: Annotated[str, typer.Option("--budget")] = "smoke",
+    output: Annotated[Path, typer.Option("--output", "-o")] = Path(
+        "reports/parkinsons-telemonitoring"
+    ),
+) -> None:
+    """Download/cache UCI Parkinsons Telemonitoring and compare record/group splits."""
+    root = _project_root()
+    cache_dir = root / "data" / "cache" / "parkinsons_telemonitoring"
+    load_parkinsons_telemonitoring(cache_dir)
+    case = load_case(root / "examples" / "parkinsons_telemonitoring" / "case.yaml")
     result = run_case(case, output, budget=budget)
     typer.echo(_status_summary(result))
 

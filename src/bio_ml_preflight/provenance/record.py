@@ -98,6 +98,18 @@ def build_provenance(
             packages[name] = importlib.metadata.version(name)
         except importlib.metadata.PackageNotFoundError:
             packages[name] = "not-installed"
+    if not case.holdout.enabled:
+        holdout_description = "retrospective development evaluation; no holdout"
+    elif case.data.adapter in {
+        "davis",
+        "bbb_martins",
+        "b3db_external",
+        "petbd_external",
+        "parkinsons_telemonitoring",
+    }:
+        holdout_description = "pseudo-sealed public benchmark"
+    else:
+        holdout_description = "locally governed holdout"
     return {
         "timestamp": datetime.now(UTC).isoformat(),
         **git_state,
@@ -111,9 +123,5 @@ def build_provenance(
         "command_line": command_line or sys.argv,
         "runtime_seconds": runtime_seconds,
         "cpu_count": os.cpu_count(),
-        "holdout_description": (
-            "pseudo-sealed public benchmark"
-            if case.data.adapter in {"davis", "bbb_martins", "b3db_external", "petbd_external"}
-            else "locally governed holdout"
-        ),
+        "holdout_description": holdout_description,
     }

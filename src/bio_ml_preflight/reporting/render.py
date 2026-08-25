@@ -22,6 +22,10 @@ Generated from structured artifacts. This retrospective preflight does not prove
 
 {{ inventory }}
 
+Cached dataset source record (when supplied):
+
+{{ dataset_source }}
+
 ## 3. Independence and replicate structure
 
 Identity-consistency gate:
@@ -131,7 +135,11 @@ Task: <code>{{ case.task.kind }}</code> for prediction unit
 <li>Generalization scenarios: {{ scenarios }}.</li>
 <li>Decision: <code>{{ case.decision.kind }}</code>.</li>
 </ul></section>
-<section><h2>2. Data inventory</h2><pre><code>{{ inventory_json }}</code></pre></section>
+<section><h2>2. Data inventory</h2>
+<pre><code>{{ inventory_json }}</code></pre>
+<p>Cached dataset source record (when supplied):</p>
+<pre><code>{{ dataset_source_json }}</code></pre>
+</section>
 <section>
 <h2>3. Independence and replicate structure</h2>
 <h3>Identity-consistency gate</h3>
@@ -287,6 +295,7 @@ def write_report(
         "case": case,
         "scenarios": ", ".join(scenario.name for scenario in case.generalization_scenarios),
         "inventory": _pretty(structured["audits"]["inventory"]),
+        "dataset_source": _pretty(structured.get("dataset_source", {})),
         "identity_consistency": _pretty(structured["audits"]["identity_consistency"]),
         "independence": _pretty(structured["audits"]["independence"]),
         "leakage": _pretty(structured["audits"]["leakage"]),
@@ -332,6 +341,9 @@ def write_report(
     (output / "report.md").write_text(markdown, encoding="utf-8")
     json_context = {
         "inventory_json": json.dumps(structured["audits"]["inventory"], indent=2, sort_keys=True),
+        "dataset_source_json": json.dumps(
+            structured.get("dataset_source", {}), indent=2, sort_keys=True
+        ),
         "identity_consistency_json": json.dumps(
             structured["audits"]["identity_consistency"], indent=2, sort_keys=True
         ),

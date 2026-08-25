@@ -13,9 +13,14 @@ class StrictModel(BaseModel):
 
 
 class DataSpec(StrictModel):
-    adapter: Literal["tabular", "davis", "bbb_martins", "b3db_external", "petbd_external"] = (
-        "tabular"
-    )
+    adapter: Literal[
+        "tabular",
+        "davis",
+        "bbb_martins",
+        "b3db_external",
+        "petbd_external",
+        "parkinsons_telemonitoring",
+    ] = "tabular"
     path: str
     fingerprint_columns: list[str] = Field(default_factory=list)
 

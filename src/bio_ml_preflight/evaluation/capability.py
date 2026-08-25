@@ -80,30 +80,45 @@ def capability_matrix(
             "permutation_p_value": permutation_p_value,
             "permutation_draws": permutation_summary["draws"],
         }
-        evidence_for = [f"Best baseline median {primary}={metric:.3f} ({best_model})."]
-        evidence_against = []
-        unmet = []
-        if delta is not None:
-            evidence_for.append(f"Delta over grouped permutation control={delta:.3f}.")
-        if permutation_p_value is not None:
-            evidence_for.append(
+        low_metric = metric < case.thresholds.limited_metric
+        high_dispersion = dispersion > case.thresholds.maximum_dispersion
+        metric_evidence = f"Best baseline median {primary}={metric:.3f} ({best_model})."
+        evidence_for = [] if low_metric else [metric_evidence]
+        evidence_against: list[str] = []
+        if low_metric:
+            evidence_against.append(metric_evidence)
+        unmet: list[str] = []
+        adequate_delta = delta is not None and delta >= case.thresholds.minimum_permutation_delta
+        adequate_permutation_p = (
+            permutation_p_value is not None
+            and permutation_p_value <= case.thresholds.maximum_permutation_p_value
+        )
+        if delta is None:
+            evidence_against.append("Delta over grouped permutation control is unavailable.")
+        else:
+            (evidence_for if adequate_delta else evidence_against).append(
+                f"Delta over grouped permutation control={delta:.3f}."
+            )
+        if permutation_p_value is None:
+            evidence_against.append("Empirical grouped-permutation p-value is unavailable.")
+        else:
+            (evidence_for if adequate_permutation_p else evidence_against).append(
                 f"Empirical grouped-permutation p={permutation_p_value:.3f} "
                 f"from {permutation_summary['draws']} draws."
             )
         if scenario.strategy not in {"random", "random_pair"} and random_median is not None:
             evidence_against.append(f"Random-split median across probes={random_median:.3f}.")
-        weak_permutation = (
-            delta is None
-            or delta < case.thresholds.minimum_permutation_delta
-            or permutation_p_value is None
-            or permutation_p_value > case.thresholds.maximum_permutation_p_value
-        )
-        if weak_permutation:
-            evidence_against.append("The improvement over permutation is absent or too small.")
-        if dispersion > case.thresholds.maximum_dispersion:
+        weak_permutation = not (adequate_delta and adequate_permutation_p)
+        if high_dispersion:
             evidence_against.append(
                 f"Split dispersion {dispersion:.3f} exceeds the configured limit."
             )
+        if weak_permutation:
+            unmet.append("Permutation separation is insufficient.")
+        if low_metric:
+            unmet.append("The controlled baseline is below the configured useful metric.")
+        if high_dispersion:
+            unmet.append("Performance is unstable across the evaluated splits.")
         leakage_contradiction = (
             scenario.strategy not in {"random", "random_pair"}
             and random_median is not None
@@ -118,16 +133,24 @@ def capability_matrix(
             next_step = (
                 "Collect or reserve outcomes for genuinely unseen entities and validate once."
             )
-        elif metric < case.thresholds.limited_metric or weak_permutation:
+        elif weak_permutation or low_metric:
             status = "INSUFFICIENT_EVIDENCE"
-            unmet.append("Signal strength and/or permutation separation is insufficient.")
-            next_step = (
-                "Add independent units along this scenario, then repeat the fixed validation."
-            )
-        elif (
-            metric >= case.thresholds.supported_metric
-            and dispersion <= case.thresholds.maximum_dispersion
-        ):
+            if case.holdout.enabled:
+                next_step = (
+                    "Audit alignment between development data and the external target and "
+                    "measurement boundary, including intended deployment, then reserve a new "
+                    "untouched confirmation set; do not adapt to or rerun this holdout."
+                )
+            elif weak_permutation:
+                next_step = (
+                    "Localize the weak target or split boundary with existing baselines before "
+                    "adding data or model capacity."
+                )
+            else:
+                next_step = (
+                    "Add independent units along this scenario, then repeat the fixed validation."
+                )
+        elif metric >= case.thresholds.supported_metric and not high_dispersion:
             status = "SUPPORTED"
             next_step = "Confirm once on a prospectively reserved or pseudo-sealed external set."
         else:
@@ -144,6 +167,7 @@ def capability_matrix(
             next_step,
             numbers,
         )
+        _apply_random_split_limit(verdict, case, scenario, scenario_overlap)
         _apply_audit_limits(
             verdict,
             audit_summary,
@@ -237,11 +261,18 @@ def _overlap_summary(
         if entity.id_column in protected_columns
         or (scenario.strategy == "scaffold" and entity.representation_column in protected_columns)
     }
+    bootstrap_entities = {
+        name
+        for name, entity in case.entities.items()
+        if entity.id_column == case.evaluation.bootstrap_unit
+    }
     summary: dict[str, Any] = {
         "exact_duplicate_overlap": 0,
         "pair_overlap": 0,
         "protected_entity_overlap_count": 0,
         "protected_entity_overlap_fraction": 0.0,
+        "bootstrap_unit_overlap_count": 0,
+        "bootstrap_unit_overlap_fraction": 0.0,
         "test_target_counts": {},
         "test_target_count_unit": None,
     }
@@ -282,7 +313,47 @@ def _overlap_summary(
                 float(summary["protected_entity_overlap_fraction"]),
                 float(entity_overlap.get("test_fraction", 0.0)),
             )
+        for entity_name in bootstrap_entities:
+            entity_overlap = result.get("entity_overlap", {}).get(entity_name, {})
+            summary["bootstrap_unit_overlap_count"] = max(
+                int(summary["bootstrap_unit_overlap_count"]),
+                int(entity_overlap.get("count", 0)),
+            )
+            summary["bootstrap_unit_overlap_fraction"] = max(
+                float(summary["bootstrap_unit_overlap_fraction"]),
+                float(entity_overlap.get("test_fraction", 0.0)),
+            )
     return summary
+
+
+def _apply_random_split_limit(
+    verdict: dict[str, Any],
+    case: CaseSpec,
+    scenario: ScenarioSpec,
+    overlap: dict[str, Any],
+) -> None:
+    if scenario.strategy not in {"random", "random_pair"}:
+        return
+    count = int(overlap.get("bootstrap_unit_overlap_count", 0))
+    if not count:
+        return
+    fraction = float(overlap.get("bootstrap_unit_overlap_fraction", 0.0))
+    unit = case.evaluation.bootstrap_unit or "independent unit"
+    verdict["evidence_against"].append(
+        f"The random-split diagnostic repeats {count} {unit} values across train and test "
+        f"(maximum test fraction {fraction:.3%})."
+    )
+    verdict["numbers"]["bootstrap_unit_overlap_count"] = count
+    verdict["numbers"]["bootstrap_unit_overlap_fraction"] = fraction
+    verdict["unmet_assumptions"].append(
+        "A random split does not assess generalization to unseen independent units."
+    )
+    if verdict["status"] == "SUPPORTED":
+        verdict["status"] = "SUPPORTED_WITH_LIMITS"
+    if verdict["status"] == "SUPPORTED_WITH_LIMITS":
+        verdict["cheapest_next_evidence"] = (
+            f"Evaluate the existing fixed baselines with {unit} held out across train and test."
+        )
 
 
 def _apply_audit_limits(

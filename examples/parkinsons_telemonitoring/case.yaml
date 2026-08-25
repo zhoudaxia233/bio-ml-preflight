@@ -1,0 +1,96 @@
+schema_version: 1
+case_id: parkinsons-telemonitoring
+data:
+  adapter: parkinsons_telemonitoring
+  path: ../../data/cache/parkinsons_telemonitoring/parkinsons_telemonitoring.parquet
+  fingerprint_columns:
+    - subject_id
+    - age
+    - sex
+    - test_time_days
+    - motor_updrs
+    - total_updrs
+    - jitter_percent
+    - jitter_abs
+    - jitter_rap
+    - jitter_ppq5
+    - jitter_ddp
+    - shimmer
+    - shimmer_db
+    - shimmer_apq3
+    - shimmer_apq5
+    - shimmer_apq11
+    - shimmer_dda
+    - nhr
+    - hnr
+    - rpde
+    - dfa
+    - ppe
+task:
+  kind: regression
+  prediction_unit: voice recording
+  target_column: motor_updrs
+  higher_is_better: false
+entities:
+  participant:
+    id_column: subject_id
+features:
+  include:
+    - jitter_percent
+    - jitter_abs
+    - jitter_rap
+    - jitter_ppq5
+    - jitter_ddp
+    - shimmer
+    - shimmer_db
+    - shimmer_apq3
+    - shimmer_apq5
+    - shimmer_apq11
+    - shimmer_dda
+    - nhr
+    - hnr
+    - rpde
+    - dfa
+    - ppe
+  exclude: [age, sex, test_time_days]
+  post_outcome: [total_updrs]
+metadata:
+  replicate_id: null
+  biological_replicate_id: null
+  batch_id: null
+  plate_id: null
+  time_column: test_time_days
+  treatment_column: null
+  control_value: null
+decision:
+  kind: none
+  group_entity: null
+  k: [5, 10]
+generalization_scenarios:
+  - name: random_record
+    strategy: random
+  - name: unseen_participant
+    strategy: group
+    group_column: subject_id
+evaluation:
+  seeds: [11, 23, 47, 83, 131]
+  primary_metric: spearman
+  secondary_metrics: [mae, rmse]
+  bootstrap_unit: subject_id
+  permutation_draws: 9
+holdout:
+  enabled: false
+  maximum_accesses: 1
+thresholds:
+  supported_metric: 0.5
+  limited_metric: 0.2
+  stable_top_k: 0.65
+  unstable_top_k: 0.5
+  maximum_dispersion: 0.15
+  minimum_permutation_delta: 0.05
+  maximum_permutation_p_value: 0.1
+role_confirmation:
+  target: true
+  prediction_unit: true
+  features: true
+  entities: true
