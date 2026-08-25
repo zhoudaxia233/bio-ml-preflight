@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.request import urlopen
 
+import numpy as np
 import pandas as pd
 
 from bio_ml_preflight.data.io import file_checksum
@@ -17,6 +18,12 @@ B3DB_EXTERNAL_SHA256 = "84940d866f7cb53b361c38e787143c20b65641b57040006e020609f9
 B3DB_EXTERNAL_URL = (
     "https://raw.githubusercontent.com/theochem/B3DB/"
     f"{B3DB_COMMIT}/B3DB/B3DB_classification_external.tsv"
+)
+PETBD_COMMIT = "d535a469976444e3bd3cb7439b9a0681cb00f5b1"
+PETBD_RAW_SHA256 = "3d8a8ecffe98942692d063c60b2476cb0a3357fda81e442dd1646c00fddd6c41"
+PETBD_URL = (
+    "https://raw.githubusercontent.com/GDUT-Computer-Medical-Science-Team/"
+    f"PETBD-QSAR/{PETBD_COMMIT}/data/PTBD_v20240912.csv"
 )
 
 
@@ -196,6 +203,185 @@ def load_b3db_external_confirmation(
     return frame, metadata
 
 
+def load_petbd_external_confirmation(
+    cache_dir: Path,
+    *,
+    protected_loader: Callable[[], tuple[pd.DataFrame, dict[str, Any]]] | None = None,
+    external_loader: Callable[[], pd.DataFrame] | None = None,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Prepare a frozen PETBD holdout without accessing model predictions."""
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    table_path = cache_dir / "petbd_external_confirmation.parquet"
+    metadata_path = cache_dir / "source.json"
+    raw_path = cache_dir / "PTBD_v20240912.csv"
+    if table_path.exists() and metadata_path.exists():
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        _validate_petbd_cache(table_path, raw_path, metadata)
+        return pd.read_parquet(table_path), metadata
+
+    if protected_loader is None:
+        protected, protected_metadata = load_b3db_external_confirmation(
+            cache_dir.parent / "b3db_external_confirmation",
+            development_cache_dir=cache_dir.parent / "bbb_martins",
+        )
+    else:
+        protected, protected_metadata = protected_loader()
+    required_protected = {
+        "sample_id",
+        "compound_id",
+        "source_compound_id",
+        "smiles",
+        "bbb_label",
+        "validation_split",
+        "source_dataset",
+        "source_reference",
+        "curation_group",
+    }
+    missing_protected = sorted(required_protected - set(protected.columns))
+    if missing_protected:
+        raise ValueError(f"Protected BBB table is missing {missing_protected}")
+
+    if external_loader is None:
+        if not raw_path.exists():
+            with urlopen(PETBD_URL, timeout=60) as response:  # noqa: S310
+                raw_path.write_bytes(response.read())
+        _require_checksum(raw_path, PETBD_RAW_SHA256, "pinned PETBD source")
+        source_mode = "pinned-official"
+        external = pd.read_csv(raw_path)
+    else:
+        external = external_loader().copy()
+        external.to_csv(raw_path, index=False)
+        source_mode = "injected-test-loader"
+
+    required = {
+        "compound index",
+        "SMILES",
+        "PMID",
+        "animal type",
+        "gender",
+        "animal weight (g)",
+        "injection dosage (μCi)",
+        "logBB at60min",
+        "brain at60min",
+        "blood at60min",
+        "ref No",
+        "DOI",
+    }
+    missing = sorted(required - set(external.columns))
+    if missing:
+        raise ValueError(f"PETBD loader returned an unexpected schema; missing {missing}")
+
+    brain = pd.to_numeric(external["brain at60min"], errors="coerce")
+    blood = pd.to_numeric(external["blood at60min"], errors="coerce")
+    positive_ratio = brain.gt(0) & blood.gt(0)
+    ratio_ready = positive_ratio & external["SMILES"].notna()
+    measurements = external.loc[ratio_ready].copy()
+    measurements["brain at60min"] = brain.loc[ratio_ready]
+    measurements["blood at60min"] = blood.loc[ratio_ready]
+    if measurements.empty:
+        raise ValueError("PETBD has no rows with positive brain and blood measurements")
+    if measurements["ref No"].isna().any():
+        raise ValueError("PETBD ratio rows require a source reference number")
+
+    measurements["compound_id"] = _inchi_keys(measurements["SMILES"])
+    measurements["log10_bb"] = np.log10(
+        measurements["brain at60min"] / measurements["blood at60min"]
+    )
+    measurements = measurements.sort_values(["compound_id", "SMILES", "compound index"])
+    holdout = measurements.groupby("compound_id", as_index=False, sort=True).agg(
+        source_compound_id=("compound index", _join_source_values),
+        smiles=("SMILES", "first"),
+        log10_bb=("log10_bb", "mean"),
+        log10_bb_min=("log10_bb", "min"),
+        log10_bb_max=("log10_bb", "max"),
+        measurement_count=("compound_id", "size"),
+        source_reference=("ref No", _join_source_values),
+        source_pmid=("PMID", _join_source_values),
+        source_doi=("DOI", _join_source_values),
+        source_animal_type=("animal type", _join_source_values),
+        source_gender=("gender", _join_source_values),
+        source_animal_weight_g=("animal weight (g)", _join_source_values),
+        source_injection_dosage_uci=("injection dosage (μCi)", _join_source_values),
+    )
+    holdout["bbb_label"] = holdout["log10_bb"].ge(-1.0).astype(int)
+
+    protected_ids = set(protected["compound_id"].astype(str))
+    overlap = holdout["compound_id"].isin(protected_ids)
+    holdout_before_overlap = holdout.copy()
+    holdout = holdout.loc[~overlap].copy()
+    holdout.insert(0, "sample_id", "petbd-" + holdout["compound_id"].astype(str))
+    holdout["validation_split"] = "holdout"
+    holdout["source_dataset"] = "PETBD PTBD_v20240912"
+    holdout["curation_group"] = None
+
+    development = protected.loc[protected["validation_split"].eq("train")].copy()
+    frame = pd.concat([development, holdout], ignore_index=True, sort=False)
+    frame.to_parquet(table_path, index=False)
+
+    source_log = pd.to_numeric(measurements["logBB at60min"], errors="coerce")
+    source_log_delta = source_log - np.log(
+        measurements["brain at60min"] / measurements["blood at60min"]
+    )
+    negative_ids = set(holdout.loc[holdout["bbb_label"].eq(0), "compound_id"])
+    negative_measurements = measurements[measurements["compound_id"].isin(negative_ids)]
+    metadata = {
+        "source": "TDC BBB_Martins development plus PETBD external PET-tracer measurements",
+        "petbd_commit": PETBD_COMMIT,
+        "petbd_url": PETBD_URL,
+        "petbd_doi": "10.1021/acs.jmedchem.5c01791",
+        "petbd_raw_sha256": file_checksum(raw_path),
+        "source_mode": source_mode,
+        "retrieval_time": datetime.now(UTC).isoformat(),
+        "protected_source_sha256": protected_metadata.get("sha256"),
+        "raw_rows": len(external),
+        "ratio_measurement_rows": len(measurements),
+        "rows_excluded_without_positive_brain_and_blood": int((~positive_ratio).sum()),
+        "rows_excluded_missing_smiles_with_positive_ratio": int(
+            (positive_ratio & external["SMILES"].isna()).sum()
+        ),
+        "external_compounds_before_identity_policy": len(holdout_before_overlap),
+        "external_identity_overlap_compounds_excluded": int(overlap.sum()),
+        "external_rows": len(holdout),
+        "external_compounds": int(holdout["compound_id"].nunique()),
+        "external_class_counts": {
+            str(label): int(count)
+            for label, count in holdout["bbb_label"].value_counts().sort_index().items()
+        },
+        "external_negative_margin_counts": {
+            "below_-1.00": int(holdout["log10_bb"].lt(-1.00).sum()),
+            "below_-1.05": int(holdout["log10_bb"].lt(-1.05).sum()),
+            "below_-1.10": int(holdout["log10_bb"].lt(-1.10).sum()),
+            "below_-1.25": int(holdout["log10_bb"].lt(-1.25).sum()),
+        },
+        "external_negative_distinct_pmids": int(negative_measurements["PMID"].nunique()),
+        "external_negative_distinct_references": int(negative_measurements["ref No"].nunique()),
+        "identity_method": "RDKit InChIKey computed from source SMILES",
+        "target_transformation": (
+            "mean per-compound log10(brain at60min / blood at60min); "
+            "BBB+ when mean >= -1.0, BBB- otherwise"
+        ),
+        "source_logbb_policy": (
+            "PETBD logBB at60min is retained only for source audit; the target is recomputed "
+            "from brain and blood because the source values predominantly follow natural log"
+        ),
+        "source_logbb_matches_ln_within_0_01_rows": int(source_log_delta.abs().le(0.01).sum()),
+        "source_logbb_ln_absolute_delta_median": float(source_log_delta.abs().median()),
+        "split_policy": (
+            "All valid positive-ratio PETBD compounds are eligible; exact identities present "
+            "in prior BBB development or confirmation data are excluded before modeling"
+        ),
+        "scientific_scope": (
+            "Public pseudo-sealed PET-tracer validation with 60-minute in-vivo brain/blood "
+            "ratios; not blinded, assay-time prospective, or interchangeable with passive "
+            "permeability. Source references and measurement context are retained."
+        ),
+        "row_count": len(frame),
+        "sha256": file_checksum(table_path),
+    }
+    metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8")
+    return frame, metadata
+
+
 def _inchi_keys(values: pd.Series) -> pd.Series:
     try:
         from rdkit import Chem, rdBase
@@ -216,6 +402,17 @@ def _inchi_keys(values: pd.Series) -> pd.Series:
     return pd.Series(keys, index=values.index, dtype="string")
 
 
+def _join_source_values(values: pd.Series) -> str:
+    parts = set()
+    for value in values.dropna():
+        if isinstance(value, float) and value.is_integer():
+            value = int(value)
+        text = str(value).strip()
+        if text:
+            parts.add(text)
+    return "|".join(sorted(parts))
+
+
 def _validate_b3db_cache(table_path: Path, raw_path: Path, metadata: dict[str, Any]) -> None:
     if metadata.get("b3db_commit") != B3DB_COMMIT:
         raise ValueError("Cached B3DB commit does not match the pinned source")
@@ -226,6 +423,18 @@ def _validate_b3db_cache(table_path: Path, raw_path: Path, metadata: dict[str, A
         else str(metadata.get("b3db_external_raw_sha256", ""))
     )
     _require_checksum(raw_path, expected_raw, "cached B3DB external source")
+
+
+def _validate_petbd_cache(table_path: Path, raw_path: Path, metadata: dict[str, Any]) -> None:
+    if metadata.get("petbd_commit") != PETBD_COMMIT:
+        raise ValueError("Cached PETBD commit does not match the pinned source")
+    _require_checksum(table_path, str(metadata.get("sha256", "")), "combined PETBD table")
+    expected_raw = (
+        PETBD_RAW_SHA256
+        if metadata.get("source_mode") in {None, "pinned-official"}
+        else str(metadata.get("petbd_raw_sha256", ""))
+    )
+    _require_checksum(raw_path, expected_raw, "cached PETBD source")
 
 
 def _require_checksum(path: Path, expected: str, label: str) -> None:

@@ -1,0 +1,64 @@
+schema_version: 1
+case_id: petbd-external-confirmation
+data:
+  adapter: petbd_external
+  path: ../../data/cache/petbd_external_confirmation/petbd_external_confirmation.parquet
+  fingerprint_columns: [compound_id, smiles, bbb_label, validation_split]
+task:
+  kind: binary_classification
+  prediction_unit: compound
+  target_column: bbb_label
+  higher_is_better: true
+entities:
+  compound:
+    id_column: compound_id
+    representation_column: smiles
+    identity_conflict_policy: exclude
+features:
+  include: [smiles]
+  exclude: []
+  post_outcome: []
+  smiles_column: smiles
+  molecular_representations: [morgan]
+metadata:
+  replicate_id: null
+  biological_replicate_id: null
+  batch_id: null
+  plate_id: null
+  time_column: null
+  treatment_column: null
+  control_value: null
+decision:
+  kind: none
+  group_entity: null
+  k: [5, 10]
+generalization_scenarios:
+  - name: external_pet_tracer_unseen_compound
+    strategy: supplied
+    split_column: validation_split
+    group_column: compound_id
+evaluation:
+  seeds: [11]
+  primary_metric: balanced_accuracy
+  secondary_metrics: [roc_auc, average_precision, log_loss]
+  bootstrap_unit: compound_id
+  classification_threshold: 0.5
+  permutation_draws: 9
+  model_allowlist: [logistic]
+holdout:
+  enabled: true
+  maximum_accesses: 1
+thresholds:
+  supported_metric: 0.65
+  limited_metric: 0.55
+  stable_top_k: 0.65
+  unstable_top_k: 0.5
+  maximum_dispersion: 0.15
+  minimum_permutation_delta: 0.05
+  maximum_permutation_p_value: 0.1
+  minimum_test_class_count: 20
+role_confirmation:
+  target: true
+  prediction_unit: true
+  features: true
+  entities: true

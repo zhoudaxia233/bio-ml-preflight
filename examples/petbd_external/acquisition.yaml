@@ -1,0 +1,60 @@
+schema_version: 1
+status: READY_FOR_ONE_SHOT
+frozen_on: 2026-08-25
+
+source:
+  name: PETBD PTBD_v20240912
+  publication_doi: 10.1021/acs.jmedchem.5c01791
+  repository_commit: d535a469976444e3bd3cb7439b9a0681cb00f5b1
+  raw_sha256: 3d8a8ecffe98942692d063c60b2476cb0a3357fda81e442dd1646c00fddd6c41
+
+eligibility:
+  include: all rows with a valid SMILES and positive brain and blood measurements at 60 minutes
+  identity: RDKit InChIKey computed from source SMILES
+  aggregation: mean log10 brain-to-blood ratio per exact compound identity
+  label_rule: BBB+ when mean log10(brain at60min / blood at60min) >= -1.0; BBB- otherwise
+  exclusions:
+    - rows without positive brain and blood measurements
+    - exact compound identities present in prior BBB development or confirmation data
+  forbidden_selection_inputs:
+    - candidate model scores
+    - candidate model errors
+    - candidate model predictions
+
+pre_model_audit:
+  raw_rows: 1056
+  eligible_measurement_rows: 569
+  rows_without_positive_brain_and_blood: 487
+  compounds_before_identity_overlap_policy: 543
+  protected_identity_overlaps_excluded: 6
+  frozen_holdout_compounds: 537
+  frozen_holdout_class_counts:
+    BBB-: 37
+    BBB+: 500
+  negative_threshold_margin_counts:
+    log10_bb_below_-1.05: 29
+    log10_bb_below_-1.10: 26
+    log10_bb_below_-1.25: 20
+  negative_support_proxies:
+    distinct_pmids: 26
+    distinct_source_references: 28
+  protected_source_sha256: 7f39ccec22f3689f96e5bff1886b0a49d0ddbfb47c04bce7c18d6f66c3c61ef2
+  combined_table_sha256: 109f22c207d8038175a0729305e62f3207f51d8530ec328ee3460f98801513d3
+
+locked_candidate:
+  source_commit: 1958cdfa28472be0888b2c06c0dae1d8f44bfa16
+  case_fingerprint: d3583059f74163523bc8538def31ec75d6343a67c3006a3c2a5890591038b74b
+  representation: morgan
+  model: logistic
+  classification_threshold: 0.5
+  primary_metric: balanced_accuracy
+  seed: 11
+  permutation_draws: 9
+  minimum_test_class_count: 20
+
+governance:
+  holdout_access_limit: 1
+  model_outcomes_accessed: false
+  run_only_from_a_clean_committed_worktree: true
+  existing_b3db_outcomes_must_not_change_the_candidate: true
+  scope: public pseudo-sealed PET-tracer validation, not blinded or assay-time prospective

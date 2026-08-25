@@ -23,6 +23,7 @@ from bio_ml_preflight.data import read_table
 from bio_ml_preflight.data.bbb import (
     load_b3db_external_confirmation,
     load_bbb_martins,
+    load_petbd_external_confirmation,
 )
 from bio_ml_preflight.data.davis import load_davis
 from bio_ml_preflight.data.synthetic import SyntheticKind, generate_synthetic
@@ -195,6 +196,28 @@ def demo_bbb_external(
         development_cache_dir=root / "data" / "cache" / "bbb_martins",
     )
     case = load_case(root / "examples" / "b3db_external" / "case.yaml")
+    result = run_case(
+        case,
+        output,
+        budget="smoke",
+        holdout_override_reason=holdout_override_reason,
+    )
+    typer.echo(_status_summary(result))
+
+
+@demo_app.command("bbb-petbd")
+def demo_bbb_petbd(
+    output: Annotated[Path, typer.Option("--output", "-o")] = Path(
+        "reports/petbd-external-confirmation"
+    ),
+    holdout_override_reason: Annotated[
+        str | None, typer.Option("--holdout-override-reason")
+    ] = None,
+) -> None:
+    """Run the frozen Morgan/logistic candidate once on PETBD PET tracers."""
+    root = _project_root()
+    load_petbd_external_confirmation(root / "data" / "cache" / "petbd_external_confirmation")
+    case = load_case(root / "examples" / "petbd_external" / "case.yaml")
     result = run_case(
         case,
         output,
