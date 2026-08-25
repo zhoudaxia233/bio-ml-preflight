@@ -39,6 +39,19 @@ uv run bio-ml-preflight discover DATA.csv --output discovery/
 
 Discovery produces candidate *testable analysis tasks*. It does not infer mechanisms from column names, promote associations to causal claims, or perform “biological discovery.” Every inferred role remains unconfirmed until a researcher reviews it.
 
+After confirming a case, inspect development-data quality without fitting a model:
+
+```bash
+uv run bio-ml-preflight eda case.yaml --output reports/example-eda
+```
+
+EDA writes `eda.json` and `column_profile.parquet` as structured sources of truth, plus
+concise Markdown/HTML reports and missingness, target-distribution, and entity-repetition
+figures. It reports identity/label conflicts, repeated entities, leakage candidates,
+measurement limits, and missing high-value metadata without deleting outliers or emitting a
+universal quality score. Holdout-enabled cases are refused before their tables are read;
+non-training rows in an ordinary supplied split are excluded from the profile.
+
 ## Why the case matters
 
 Suitability is conditional on the target, prediction unit, deployment population, generalization axis, decision rule, and validation design. Ten thousand measurements from ten patients are not ten thousand independent samples. Random row splits can place the same patient, molecule, target, batch, or near-duplicate in both sets; they are useful diagnostics but cannot establish unseen-entity performance.

@@ -52,26 +52,37 @@ def audit_dataset(frame: pd.DataFrame, case: CaseSpec) -> dict[str, Any]:
         if column not in frame:
             entities[name] = {"status": "NOT_ASSESSABLE", "reason": f"missing {column}"}
             continue
-        entity_columns.append(column)
-        counts = frame[column].value_counts()
+        observed = frame.loc[frame[column].notna()]
+        counts = observed[column].value_counts()
         entity_result: dict[str, Any] = {
             "id_column": column,
             "unique": int(counts.size),
+            "missing_identifier_rows": int(frame[column].isna().sum()),
             "rows_per_entity": {
                 "min": int(counts.min()),
                 "median": float(counts.median()),
                 "max": int(counts.max()),
-            },
-            "duplicate_identifier_rows": int(frame[column].duplicated(keep=False).sum()),
+            }
+            if not counts.empty
+            else {},
+            "duplicate_identifier_rows": int(counts[counts > 1].sum()),
         }
+        if counts.empty:
+            entity_result.update(
+                {
+                    "status": "NOT_ASSESSABLE",
+                    "reason": f"all values in declared entity column {column!r} are missing",
+                }
+            )
+            entities[name] = entity_result
+            continue
+        entity_columns.append(column)
         if _entity_defines_prediction_unit(case, name, entity.id_column):
-            target_conflicts = frame.groupby(column, dropna=False)[target].nunique(dropna=True)
+            target_conflicts = observed.groupby(column)[target].nunique(dropna=True)
             entity_result["conflicting_target_entities"] = int((target_conflicts > 1).sum())
         representation = entity.representation_column
         if representation and representation in frame:
-            representation_counts = frame.groupby(column, dropna=False)[representation].nunique(
-                dropna=True
-            )
+            representation_counts = observed.groupby(column)[representation].nunique(dropna=True)
             entity_result["representation_column"] = representation
             entity_result["inconsistent_representation_entities"] = int(
                 (representation_counts > 1).sum()
@@ -85,20 +96,31 @@ def audit_dataset(frame: pd.DataFrame, case: CaseSpec) -> dict[str, Any]:
     pair_columns = entity_columns[:2]
     pair: dict[str, Any] = {"status": "NOT_ASSESSABLE", "reason": "fewer than two entities"}
     if len(pair_columns) == 2:
-        pair_counts = frame.groupby(pair_columns, dropna=False).size()
-        label_conflicts = frame.groupby(pair_columns, dropna=False)[target].nunique(dropna=True)
-        left_unique, right_unique = (frame[column].nunique(dropna=True) for column in pair_columns)
-        pair = {
-            "columns": pair_columns,
-            "unique_pairs": int(pair_counts.size),
-            "repeated_pair_rows": int(pair_counts[pair_counts > 1].sum()),
-            "conflicting_label_pairs": int((label_conflicts > 1).sum()),
-            "pair_density": float(pair_counts.size / max(left_unique * right_unique, 1)),
-            "left_degree": _distribution(frame.groupby(pair_columns[0])[pair_columns[1]].nunique()),
-            "right_degree": _distribution(
-                frame.groupby(pair_columns[1])[pair_columns[0]].nunique()
-            ),
-        }
+        complete_pairs = frame.dropna(subset=pair_columns)
+        if complete_pairs.empty:
+            pair = {
+                "status": "NOT_ASSESSABLE",
+                "reason": "no rows contain both declared entity identifiers",
+            }
+        else:
+            pair_counts = complete_pairs.groupby(pair_columns).size()
+            label_conflicts = complete_pairs.groupby(pair_columns)[target].nunique(dropna=True)
+            left_unique, right_unique = (
+                complete_pairs[column].nunique(dropna=True) for column in pair_columns
+            )
+            pair = {
+                "columns": pair_columns,
+                "unique_pairs": int(pair_counts.size),
+                "repeated_pair_rows": int(pair_counts[pair_counts > 1].sum()),
+                "conflicting_label_pairs": int((label_conflicts > 1).sum()),
+                "pair_density": float(pair_counts.size / max(left_unique * right_unique, 1)),
+                "left_degree": _distribution(
+                    complete_pairs.groupby(pair_columns[0])[pair_columns[1]].nunique()
+                ),
+                "right_degree": _distribution(
+                    complete_pairs.groupby(pair_columns[1])[pair_columns[0]].nunique()
+                ),
+            }
     replicates = _replicate_audit(frame, case)
     coverage = _coverage(frame, case)
     target_values = frame[target]
@@ -124,6 +146,11 @@ def audit_dataset(frame: pd.DataFrame, case: CaseSpec) -> dict[str, Any]:
         independence_warnings.append(
             "Rows repeat declared entities; row bootstrap and random row splitting may "
             "overstate independence."
+        )
+    if any(result.get("missing_identifier_rows", 0) for result in entities.values()):
+        independence_warnings.append(
+            "Declared entity identifiers contain missing values; those rows cannot establish "
+            "independent-unit support."
         )
     if any(result.get("conflicting_target_entities", 0) for result in entities.values()):
         independence_warnings.append(
@@ -450,27 +477,44 @@ def _replicate_audit(frame: pd.DataFrame, case: CaseSpec) -> dict[str, Any]:
         pair_columns = [
             entity.id_column for entity in case.entities.values() if entity.id_column in frame
         ]
-        if len(pair_columns) < 2 or not frame.duplicated(pair_columns[:2], keep=False).any():
+        complete_pairs = frame.dropna(subset=pair_columns[:2]) if len(pair_columns) >= 2 else frame
+        if (
+            len(pair_columns) < 2
+            or not complete_pairs.duplicated(pair_columns[:2], keep=False).any()
+        ):
             return {
                 "status": "NOT_ASSESSABLE",
                 "reason": "No replicate metadata or repeated entity-pair measurements.",
             }
         available = pair_columns[:2]
-    grouped = frame.groupby(available, dropna=False)[target]
-    within = grouped.std().dropna()
-    means = grouped.mean()
+    observed = frame.dropna(subset=available)
+    grouped = observed.groupby(available)[target]
     repeated = grouped.size()
-    consistency = grouped.apply(lambda values: values.rank().corr(pd.Series(values).rank()))
+    repeated_groups = int((repeated > 1).sum())
+    if repeated_groups == 0:
+        return {
+            "status": "NOT_ASSESSABLE",
+            "reason": "Replicate columns are present but no observed identifier repeats.",
+            "grouping_columns": available,
+            "repeated_groups": 0,
+            "missing_group_rows": int(len(frame) - len(observed)),
+        }
+    if pd.api.types.is_numeric_dtype(frame[target]):
+        within = grouped.std().dropna()
+        means = grouped.mean()
+        within_median = float(within.median()) if len(within) else None
+        between_dispersion = float(means.std()) if len(means) > 1 else None
+    else:
+        within_median = None
+        between_dispersion = None
     return {
         "status": "ASSESSED",
         "grouping_columns": available,
-        "repeated_groups": int((repeated > 1).sum()),
-        "within_group_dispersion_median": float(within.median()) if len(within) else None,
-        "between_group_dispersion": float(means.std()) if len(means) > 1 else None,
+        "repeated_groups": repeated_groups,
+        "missing_group_rows": int(len(frame) - len(observed)),
+        "within_group_dispersion_median": within_median,
+        "between_group_dispersion": between_dispersion,
         "conflicting_label_rate": float((grouped.nunique() > 1).mean()),
-        "rank_consistency_proxy": float(consistency.dropna().median())
-        if consistency.notna().any()
-        else None,
         "noise_warning": "A dispersion proxy is not a proven noise ceiling.",
     }
 

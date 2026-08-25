@@ -135,6 +135,18 @@ uv run bio-ml-preflight run case.yaml --budget smoke
 uv run bio-ml-preflight discover data.csv --output discovery/
 ```
 
+确认 `case.yaml` 后，可以在不训练模型的情况下检查开发数据质量：
+
+```bash
+uv run bio-ml-preflight eda case.yaml --output reports/example-eda
+```
+
+EDA 将 `eda.json` 和 `column_profile.parquet` 作为结构化事实来源，同时生成简洁的
+Markdown/HTML 报告，以及缺失率、目标分布和实体重复图。它会报告身份或标签冲突、
+重复实体、潜在泄漏、测量可靠性边界和缺失的高价值元数据；不会自动删除异常值，也
+不会给出一个掩盖问题差异的通用质量分数。启用 holdout 的 case 会在读取数据表前被
+拒绝；普通 supplied split 中的非训练行不会进入 EDA。
+
 ## 输出
 
 每次运行会生成一个报告目录，主要包括：

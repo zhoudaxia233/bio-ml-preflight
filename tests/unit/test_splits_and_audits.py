@@ -10,7 +10,7 @@ from bio_ml_preflight.audits import (
 )
 from bio_ml_preflight.cli import synthetic_case
 from bio_ml_preflight.contracts import CaseSpec
-from bio_ml_preflight.contracts.case import EntitySpec, ScenarioSpec
+from bio_ml_preflight.contracts.case import EntitySpec, MetadataSpec, ScenarioSpec
 from bio_ml_preflight.data.synthetic import generate_synthetic
 from bio_ml_preflight.runner import _test_target_counts, run_case
 from bio_ml_preflight.splits import create_split
@@ -60,6 +60,46 @@ def test_entity_target_and_representation_conflicts_are_reported(tmp_path) -> No
     assert compound["conflicting_target_entities"] == 1
     assert compound["inconsistent_representation_entities"] == 1
     assert len(result["warnings"]) == 3
+
+
+@pytest.mark.parametrize("identifiers", [["a", None, None], [None, None, None]])
+def test_missing_entity_identifiers_remain_auditable(
+    tmp_path, identifiers: list[str | None]
+) -> None:
+    frame = pd.DataFrame({"patient_id": identifiers, "x": [1.0, 2.0, 3.0], "y": [0, 0, 1]})
+    case = synthetic_case("no_signal", tmp_path / "unused.parquet")
+    case.task.target_column = "y"
+    case.task.prediction_unit = "patient"
+    case.entities = {"patient": EntitySpec(id_column="patient_id")}
+
+    patient = audit_dataset(frame, case)["independence"]["entities"]["patient"]
+
+    assert patient["missing_identifier_rows"] == identifiers.count(None)
+    assert patient["duplicate_identifier_rows"] == 0
+    if identifiers[0] is None:
+        assert patient["status"] == "NOT_ASSESSABLE"
+    else:
+        assert patient["rows_per_entity"]["max"] == 1
+
+
+def test_unique_replicate_identifiers_do_not_assess_measurement_reliability(tmp_path) -> None:
+    frame = pd.DataFrame(
+        {
+            "sample_id": ["a", "b", "c"],
+            "replicate_id": ["a-1", "b-1", "c-1"],
+            "x": [1.0, 2.0, 3.0],
+            "y": [0.1, 0.2, 0.3],
+        }
+    )
+    case = synthetic_case("no_signal", tmp_path / "unused.parquet")
+    case.task.target_column = "y"
+    case.entities = {"sample": EntitySpec(id_column="sample_id")}
+    case.metadata = MetadataSpec(replicate_id="replicate_id")
+
+    measurement = audit_dataset(frame, case)["measurement"]
+
+    assert measurement["status"] == "NOT_ASSESSABLE"
+    assert measurement["repeated_groups"] == 0
 
 
 def test_partial_entity_does_not_define_prediction_unit_label_consistency(tmp_path) -> None:

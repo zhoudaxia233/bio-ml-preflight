@@ -30,6 +30,7 @@ from bio_ml_preflight.data.parkinsons import load_parkinsons_telemonitoring
 from bio_ml_preflight.data.synthetic import SyntheticKind, generate_synthetic
 from bio_ml_preflight.discovery import discover_tasks
 from bio_ml_preflight.discovery.cards import infer_roles
+from bio_ml_preflight.eda import run_eda
 from bio_ml_preflight.evaluation.graph_readiness import (
     assess_graph_readiness,
     write_graph_readiness,
@@ -138,6 +139,20 @@ def discover_command(
     """Generate reviewable analysis claim cards without biological invention."""
     payload = discover_tasks(data_path, output)
     typer.echo(f"Wrote {len(payload['claim_cards'])} provisional claim cards to {output}")
+
+
+@app.command("eda")
+def eda_command(
+    case_yaml: Annotated[Path, typer.Argument(exists=True, readable=True)],
+    output: Annotated[Path | None, typer.Option("--output", "-o")] = None,
+) -> None:
+    """Inspect development-data quality without fitting a model or reading a holdout."""
+    case = load_case(case_yaml)
+    destination = output or Path("reports") / f"{case.case_id}-eda"
+    result = run_eda(case, destination)
+    typer.echo(
+        f"EDA: {destination / 'eda.md'} ({len(result['findings'])} evidence-boundary findings)"
+    )
 
 
 @app.command("assess-graph-readiness")
