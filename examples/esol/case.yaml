@@ -1,0 +1,47 @@
+schema_version: 1
+case_id: esol
+data:
+  adapter: tabular
+  path: ../../data/cache/esol/esol.csv
+task:
+  kind: regression
+  prediction_unit: compound
+  target_column: measured log solubility in mols per litre
+entities:
+  compound:
+    id_column: compound_id
+    representation_column: smiles
+    identity_conflict_policy: keep
+features:
+  include: [smiles]
+  smiles_column: smiles
+  molecular_representations: [morgan]
+metadata: {}
+generalization_scenarios:
+  - name: random_record_diagnostic
+    strategy: random
+  - name: unseen_scaffold
+    strategy: scaffold
+    group_column: smiles
+evaluation:
+  seeds: [11, 23]
+  primary_metric: rmse
+  secondary_metrics: [mae, spearman]
+  bootstrap_unit: compound_id
+  permutation_draws: 9
+  model_allowlist: [dummy, elastic_net, extra_trees]
+holdout:
+  enabled: false
+# Raw log10(mol/L) units; illustrative workflow thresholds, not a scientific standard.
+# Lower RMSE is better. Positive permutation delta denotes reduced error.
+thresholds:
+  supported_metric: 1.0
+  limited_metric: 1.5
+  maximum_dispersion: 0.25
+  minimum_permutation_delta: 0.15
+  maximum_permutation_p_value: 0.1
+role_confirmation:
+  target: true
+  prediction_unit: true
+  features: true
+  entities: true

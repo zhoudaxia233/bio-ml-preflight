@@ -11,4 +11,4 @@ generalization_scenarios:
 evaluation: {seeds: [11, 23, 47], primary_metric: spearman, secondary_metrics: [mae, rmse], bootstrap_unit: target_id}
 decision: {kind: top_k_per_group, group_entity: target, k: [5, 10]}
 thresholds: {supported_metric: 0.5, limited_metric: 0.2, stable_top_k: 0.85, unstable_top_k: 0.75, maximum_dispersion: 0.15, minimum_permutation_delta: 0.05}
-role_confirmation: {target: true, prediction_unit: true, features: true}
+role_confirmation: {target: true, prediction_unit: true, features: true, entities: true}

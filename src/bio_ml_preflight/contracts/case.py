@@ -248,6 +248,15 @@ class CaseSpec(StrictModel):
         return hashlib.sha256(payload.encode()).hexdigest()
 
 
+def unconfirmed_roles(case: CaseSpec) -> list[str]:
+    """Return required semantic roles that were not explicitly confirmed."""
+    required = {"entities", "features", "prediction_unit", "target"}
+    declared = set(case.role_confirmation)
+    return sorted(
+        role for role in required | declared if not case.role_confirmation.get(role, False)
+    )
+
+
 def load_case(path: Path) -> CaseSpec:
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     case = CaseSpec.model_validate(raw)

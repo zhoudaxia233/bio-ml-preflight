@@ -10,6 +10,7 @@ from jinja2 import BaseLoader, Environment
 
 from bio_ml_preflight.audits import audit_dataset
 from bio_ml_preflight.contracts import CaseSpec
+from bio_ml_preflight.contracts.case import unconfirmed_roles
 from bio_ml_preflight.data import read_table
 from bio_ml_preflight.features import model_feature_columns
 
@@ -286,7 +287,7 @@ def declaration_findings(case: CaseSpec) -> list[dict[str, str]]:
             }
         )
 
-    unconfirmed = sorted(key for key, value in case.role_confirmation.items() if not value)
+    unconfirmed = unconfirmed_roles(case)
     if unconfirmed:
         add(
             "ACTION_REQUIRED",
@@ -508,12 +509,18 @@ def readiness_findings(
             "Confirm these values are available at prediction time and cannot encode outcomes.",
         )
     if audits["measurement"].get("status") == "NOT_ASSESSABLE":
+        next_evidence = str(
+            audits["measurement"].get(
+                "cheapest_next_evidence",
+                "Add replicate identifiers or repeated measurements under a declared protocol.",
+            )
+        )
         add(
             "NOT_ASSESSABLE",
             "measurement_reliability_not_assessable",
             "measurement reliability",
             str(audits["measurement"].get("reason")),
-            "Add replicate identifiers or repeated measurements under a declared protocol.",
+            next_evidence,
         )
     for boundary in audits["missing_high_value_metadata"]:
         add(

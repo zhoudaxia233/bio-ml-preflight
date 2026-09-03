@@ -100,17 +100,19 @@ def bootstrap_interval(
 
 
 def empirical_permutation_summary(
-    observed: float, null_values: Iterable[float]
+    observed: float, null_values: Iterable[float], *, higher_is_better: bool = True
 ) -> dict[str, float | int | None]:
     null = np.asarray(list(null_values), dtype=float)
     null = null[np.isfinite(null)]
     if not np.isfinite(observed) or not len(null):
-        return {"draws": int(len(null)), "median": None, "q95": None, "p_value": None}
+        return {"draws": int(len(null)), "median": None, "q05": None, "q95": None, "p_value": None}
+    at_least_as_good = null >= observed if higher_is_better else null <= observed
     return {
         "draws": int(len(null)),
         "median": float(np.median(null)),
+        "q05": float(np.quantile(null, 0.05)),
         "q95": float(np.quantile(null, 0.95)),
-        "p_value": float((1 + np.count_nonzero(null >= observed)) / (len(null) + 1)),
+        "p_value": float((1 + np.count_nonzero(at_least_as_good)) / (len(null) + 1)),
     }
 
 

@@ -10,8 +10,12 @@ from bio_ml_preflight.data import read_table
 
 
 def infer_roles(frame: pd.DataFrame) -> dict[str, list[dict[str, Any]]]:
-    numeric = [str(column) for column in frame.select_dtypes(include="number").columns]
-    categorical = [str(column) for column in frame.select_dtypes(exclude="number").columns]
+    numeric_columns = list(frame.select_dtypes(include="number").columns)
+    categorical_columns = list(frame.select_dtypes(exclude="number").columns)
+    numeric = [str(column) for column in numeric_columns]
+    numeric_binary = [
+        str(column) for column in numeric_columns if frame[column].nunique(dropna=True) == 2
+    ]
     identifiers = [
         str(column)
         for column in frame.columns
@@ -25,11 +29,16 @@ def infer_roles(frame: pd.DataFrame) -> dict[str, list[dict[str, Any]]]:
         "candidate_numeric_targets": [
             {"column": column, "confirmed": False, "basis": "physical numeric type"}
             for column in numeric
+            if column not in numeric_binary
         ],
         "candidate_categorical_targets": [
-            {"column": column, "confirmed": False, "basis": "physical categorical type"}
-            for column in categorical
+            {"column": str(column), "confirmed": False, "basis": "physical categorical type"}
+            for column in categorical_columns
             if 2 <= frame[column].nunique(dropna=True) <= 20
+        ]
+        + [
+            {"column": column, "confirmed": False, "basis": "two observed numeric values"}
+            for column in numeric_binary
         ],
         "candidate_identifiers": [
             {"column": column, "confirmed": False, "basis": "name/uniqueness heuristic"}

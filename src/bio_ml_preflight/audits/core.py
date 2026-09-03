@@ -547,6 +547,27 @@ def _replicate_audit(frame: pd.DataFrame, case: CaseSpec) -> dict[str, Any]:
             "repeated_groups": 0,
             "missing_group_rows": int(len(frame) - len(observed)),
         }
+    conflicting_label_rate = float((grouped.nunique()[repeated > 1] > 1).mean())
+    if case.task.kind == "binary_classification":
+        return {
+            "status": "NOT_ASSESSABLE",
+            "reason": (
+                "Repeated class labels assess label consistency, not measurement reliability."
+            ),
+            "grouping_columns": available,
+            "repeated_groups": repeated_groups,
+            "missing_group_rows": int(len(frame) - len(observed)),
+            "label_consistency_assessed": True,
+            "conflicting_label_rate": conflicting_label_rate,
+            "unmet_assumption": (
+                "The measured quantity and replicate protocol needed to estimate reliability "
+                "were not declared."
+            ),
+            "cheapest_next_evidence": (
+                "Declare the measured quantity and replicate protocol, then repeat a "
+                "representative subset."
+            ),
+        }
     if pd.api.types.is_numeric_dtype(frame[target]):
         within = grouped.std().dropna()
         means = grouped.mean()
@@ -562,7 +583,7 @@ def _replicate_audit(frame: pd.DataFrame, case: CaseSpec) -> dict[str, Any]:
         "missing_group_rows": int(len(frame) - len(observed)),
         "within_group_dispersion_median": within_median,
         "between_group_dispersion": between_dispersion,
-        "conflicting_label_rate": float((grouped.nunique() > 1).mean()),
+        "conflicting_label_rate": conflicting_label_rate,
         "noise_warning": "A dispersion proxy is not a proven noise ceiling.",
     }
 

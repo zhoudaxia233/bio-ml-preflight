@@ -27,6 +27,20 @@ def test_empirical_permutation_summary_uses_upper_tail_with_correction() -> None
     assert result["p_value"] == 0.4
 
 
+def test_error_permutation_tail_includes_ties_and_preserves_raw_quantiles() -> None:
+    result = empirical_permutation_summary(
+        0.2, [0.1, 0.2, 0.5, 0.9, float("nan")], higher_is_better=False
+    )
+    assert result["draws"] == 4
+    assert result["p_value"] == 0.6
+    assert result["median"] == 0.35
+    assert result["q05"] == np.quantile([0.1, 0.2, 0.5, 0.9], 0.05)
+    assert result["q95"] == np.quantile([0.1, 0.2, 0.5, 0.9], 0.95)
+    empty = empirical_permutation_summary(0.2, [], higher_is_better=False)
+    assert empty["p_value"] is None
+    assert empty["q05"] is None
+
+
 def test_binary_metrics_use_the_declared_classification_threshold() -> None:
     result = compute_metrics(
         np.array([0.0, 1.0]),

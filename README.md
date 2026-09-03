@@ -117,6 +117,14 @@ verdict is `INSUFFICIENT_EVIDENCE`. Measurement reliability and batch confoundin
 `NOT_ASSESSABLE`. This retrospective result does not establish future-time transport, clinical
 utility, or a causal effect.
 
+## MoleculeNet ESOL regression check
+
+The [ESOL example](examples/esol/README.md) uses a pinned public 1,128-record
+solubility table, the ordinary tabular workflow and existing Morgan/linear/tree
+baselines. It checks lower-is-better RMSE, identity conflicts and random-versus-scaffold
+boundaries without a new dependency or runtime adapter. Its fixed protocol is a
+retrospective workflow check, not a reproduction of a leaderboard score.
+
 ## BBB_Martins molecular-classification demo
 
 This second TDC demo predicts a binary BBB label from SMILES and compares a random-compound diagnostic with scaffold-separated validation. Its case explicitly excludes the 12 compound identifiers with conflicting labels or inconsistent SMILES (24 rows) before splitting, and records that policy in every report.

@@ -10,5 +10,4 @@ generalization_scenarios:
   - {name: cold_target, strategy: group, group_column: target_id}
 evaluation: {seeds: [11, 23, 47], primary_metric: spearman, secondary_metrics: [mae, rmse], bootstrap_unit: target_id}
 decision: {kind: top_k_per_group, group_entity: target, k: [5, 10]}
-role_confirmation: {target: true, prediction_unit: true, features: true}
-
+role_confirmation: {target: true, prediction_unit: true, features: true, entities: true}

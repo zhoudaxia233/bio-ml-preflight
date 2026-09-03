@@ -18,6 +18,7 @@ from bio_ml_preflight.contracts.case import (
     ScenarioSpec,
     TaskSpec,
     ThresholdSpec,
+    unconfirmed_roles,
 )
 from bio_ml_preflight.data import read_table
 from bio_ml_preflight.data.bbb import (
@@ -95,7 +96,7 @@ def init_case(
 def validate_case(case_yaml: Annotated[Path, typer.Argument(exists=True, readable=True)]) -> None:
     """Validate a versioned case and report unresolved declarations."""
     case = load_case(case_yaml)
-    unresolved = sorted(key for key, confirmed in case.role_confirmation.items() if not confirmed)
+    unresolved = unconfirmed_roles(case)
     result = {
         "valid": True,
         "schema_version": case.schema_version,
@@ -296,7 +297,12 @@ def autoprobe_evaluate(
 
 def synthetic_case(kind: SyntheticKind, data_path: Path) -> CaseSpec:
     data = DataSpec(path=str(data_path.resolve()))
-    confirmed = {"target": True, "prediction_unit": True, "features": True}
+    confirmed = {
+        "target": True,
+        "prediction_unit": True,
+        "features": True,
+        "entities": True,
+    }
     if kind == "stable":
         return CaseSpec(
             case_id="synthetic-stable",

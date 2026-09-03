@@ -1,8 +1,98 @@
 import pandas as pd
+import pytest
 
 from bio_ml_preflight.cli import synthetic_case
 from bio_ml_preflight.contracts.case import EntitySpec, ScenarioSpec
 from bio_ml_preflight.evaluation.capability import capability_matrix
+
+
+@pytest.mark.parametrize("metric", ["rmse", "mae", "log_loss"])
+def test_error_metrics_select_lower_error_and_compare_the_lower_null_tail(tmp_path, metric) -> None:
+    case = synthetic_case("no_signal", tmp_path / "unused.csv")
+    case.evaluation.primary_metric = metric
+    case.generalization_scenarios = [ScenarioSpec(name="random", strategy="random")]
+    case.thresholds.supported_metric = 0.75
+    case.thresholds.limited_metric = 1.25
+    rows = []
+    for model, error in [("lower_error", 0.5), ("higher_error", 2.0)]:
+        rows.append(
+            {
+                "scenario": "random",
+                "strategy": "random",
+                "model": model,
+                "permuted": False,
+                "permutation_draw": None,
+                metric: error,
+            }
+        )
+        rows.extend(
+            {
+                "scenario": "random",
+                "strategy": "random",
+                "model": model,
+                "permuted": True,
+                "permutation_draw": draw,
+                metric: 3.0,
+            }
+            for draw in range(9)
+        )
+
+    verdict = capability_matrix(pd.DataFrame(rows), case, {})[0]
+
+    assert verdict["numbers"]["best_model"] == "lower_error"
+    assert verdict["numbers"]["median"] == 0.5
+    assert verdict["numbers"]["permutation_delta"] == 2.5
+    assert verdict["numbers"]["permutation_p_value"] == 0.1
+    assert verdict["numbers"]["primary_metric_higher_is_better"] is False
+    assert verdict["numbers"]["permutation_q05"] == 3.0
+    assert verdict["status"] == "SUPPORTED"
+
+
+@pytest.mark.parametrize("metric", ["rmse", "spearman"])
+@pytest.mark.parametrize(
+    "error,null_error,random_error,expected",
+    [
+        (0.2, 0.9, None, "SUPPORTED"),
+        (0.3, 0.9, None, "SUPPORTED"),
+        (0.4, 0.9, None, "SUPPORTED_WITH_LIMITS"),
+        (0.5, 0.9, None, "SUPPORTED_WITH_LIMITS"),
+        (0.6, 0.9, None, "INSUFFICIENT_EVIDENCE"),
+        (0.2, 0.1, None, "INSUFFICIENT_EVIDENCE"),
+        (0.6, 0.9, 0.2, "CONTRADICTED"),
+        (0.4, 0.9, 0.6, "SUPPORTED_WITH_LIMITS"),
+    ],
+)
+def test_metric_direction_preserves_threshold_and_transfer_verdicts(
+    tmp_path, metric, error, null_error, random_error, expected
+) -> None:
+    case = synthetic_case("no_signal", tmp_path / "unused.csv")
+    case.evaluation.primary_metric = metric
+    case.task.higher_is_better = False  # Outcome ranking must not reverse metric quality.
+    case.thresholds.supported_metric = 0.3 if metric == "rmse" else 0.7
+    case.thresholds.limited_metric = 0.5
+    case.generalization_scenarios = [
+        ScenarioSpec(name="held_out", strategy="group", group_column="entity_id")
+    ]
+    scenarios = [("held_out", "group", error)]
+    if random_error is not None:
+        case.generalization_scenarios.append(ScenarioSpec(name="random", strategy="random"))
+        scenarios.append(("random", "random", random_error))
+    rows = []
+    for name, strategy, current_error in scenarios:
+        for draw in range(-1, 9):
+            value = current_error if draw == -1 else null_error
+            rows.append(
+                {
+                    "scenario": name,
+                    "strategy": strategy,
+                    "model": "ridge",
+                    "permuted": draw != -1,
+                    "permutation_draw": None if draw == -1 else draw,
+                    metric: value if metric == "rmse" else 1 - value,
+                }
+            )
+
+    assert capability_matrix(pd.DataFrame(rows), case, {})[0]["status"] == expected
 
 
 def _supported_experiments(scenario: str, strategy: str) -> pd.DataFrame:
@@ -71,7 +161,7 @@ def test_random_success_and_cold_failure_is_contradicted(tmp_path) -> None:
     )
 
 
-def test_entity_conflicts_cap_support_and_missing_metadata_gets_rows(tmp_path) -> None:
+def test_entity_conflicts_cap_support_and_audit_boundaries_get_rows(tmp_path) -> None:
     case = synthetic_case("no_signal", tmp_path / "x.parquet")
     case.generalization_scenarios = [ScenarioSpec(name="random_row", strategy="random")]
     audits = {
@@ -86,7 +176,10 @@ def test_entity_conflicts_cap_support_and_missing_metadata_gets_rows(tmp_path) -
         },
         "measurement": {
             "status": "NOT_ASSESSABLE",
-            "reason": "No replicate metadata or repeated entity-pair measurements.",
+            "reason": "Repeated class labels do not establish measurement reliability.",
+            "unmet_assumption": "The replicate protocol was not declared.",
+            "cheapest_next_evidence": "Declare the replicate protocol.",
+            "label_consistency_assessed": True,
         },
         "missing_high_value_metadata": [
             "batch_id: batch confounding is not assessable",
@@ -110,6 +203,9 @@ def test_entity_conflicts_cap_support_and_missing_metadata_gets_rows(tmp_path) -
     assert prediction["numbers"]["conflicting_target_entities"] == 5
     assert prediction["numbers"]["inconsistent_representation_entities"] == 9
     assert measurement["status"] == "NOT_ASSESSABLE"
+    assert measurement["unmet_assumptions"] == ["The replicate protocol was not declared."]
+    assert measurement["cheapest_next_evidence"] == "Declare the replicate protocol."
+    assert measurement["numbers"]["label_consistency_assessed"] is True
     assert batch["status"] == "NOT_ASSESSABLE"
 
 
@@ -145,6 +241,54 @@ def test_protected_entity_overlap_caps_support(tmp_path) -> None:
     assert row["numbers"]["protected_entity_overlap_fraction"] == 0.1
     assert ranking["status"] == "SUPPORTED_WITH_LIMITS"
     assert ranking["numbers"]["protected_entity_overlap_count"] == 1
+
+
+@pytest.mark.parametrize(
+    "conflict,overlap_kind",
+    [
+        ("conflicting_target_entities", None),
+        ("inconsistent_representation_entities", None),
+        (None, "exact_duplicate_overlap"),
+        (None, "pair_overlap"),
+        (None, "entity_overlap"),
+        ("conflicting_target_entities", "entity_overlap"),
+    ],
+)
+def test_audit_advice_separates_conflicts_from_overlap(tmp_path, conflict, overlap_kind) -> None:
+    case = synthetic_case("stable", tmp_path / "unused.parquet")
+    case.generalization_scenarios = [
+        ScenarioSpec(name="cold_target", strategy="group", group_column="target_id")
+    ]
+    experiments = _supported_experiments("cold_target", "group")
+    ranking = {"top_k": {"5": {"average_pairwise_jaccard": 0.9}}}
+    original = capability_matrix(experiments, case, ranking)
+    audits = {"independence": {"entities": {"target": {conflict: 1} if conflict else {}}}}
+    overlap = {}
+    if overlap_kind:
+        overlap["cold_target:11"] = {
+            overlap_kind: {"target": {"count": 1, "test_fraction": 0.1}}
+            if overlap_kind == "entity_overlap"
+            else 1
+        }
+
+    rows = capability_matrix(experiments, case, ranking, audits=audits, overlap_results=overlap)
+
+    assert {row["claim_or_scenario"] for row in original} == {
+        "cold_target",
+        "top-5 selection within target",
+    }
+    for before in original:
+        row = next(row for row in rows if row["claim_or_scenario"] == before["claim_or_scenario"])
+        assert row["status"] == "SUPPORTED_WITH_LIMITS"
+        advice = row["cheapest_next_evidence"]
+        assert ("overlap-free split manifests" in advice) is bool(overlap_kind)
+        assert ("conflicting entity records" in advice) is bool(conflict)
+        assert before["cheapest_next_evidence"] in advice
+        if conflict:
+            assert row["numbers"][conflict] == 1
+            assert "declared identity policy" in advice
+        if not overlap_kind:
+            assert not any("split isolation" in value for value in row["unmet_assumptions"])
 
 
 def test_small_external_minority_class_blocks_confirmation(tmp_path) -> None:
@@ -204,8 +348,10 @@ def test_small_external_minority_class_blocks_confirmation(tmp_path) -> None:
     assert "at least 16" in row["cheapest_next_evidence"]
 
 
+@pytest.mark.parametrize("target_conflicts", [0, 1])
 def test_adequately_supported_holdout_with_weak_permutation_targets_new_boundary(
     tmp_path,
+    target_conflicts,
 ) -> None:
     case = synthetic_case("no_signal", tmp_path / "x.parquet")
     case.task.kind = "binary_classification"
@@ -257,7 +403,12 @@ def test_adequately_supported_holdout_with_weak_permutation_targets_new_boundary
         }
     }
 
-    row = capability_matrix(experiments, case, {}, audits={}, overlap_results=overlap)[0]
+    audits = {
+        "independence": {
+            "entities": {"compound": {"conflicting_target_entities": target_conflicts}}
+        }
+    }
+    row = capability_matrix(experiments, case, {}, audits=audits, overlap_results=overlap)[0]
 
     assert row["status"] == "INSUFFICIENT_EVIDENCE"
     assert row["numbers"]["permutation_p_value"] == 0.3
@@ -272,7 +423,10 @@ def test_adequately_supported_holdout_with_weak_permutation_targets_new_boundary
     assert "Add independent units" not in row["cheapest_next_evidence"]
 
 
-def test_low_unstable_baseline_and_weak_permutation_are_all_opposing(tmp_path) -> None:
+@pytest.mark.parametrize("target_conflicts", [0, 1])
+def test_low_unstable_baseline_and_weak_permutation_are_all_opposing(
+    tmp_path, target_conflicts
+) -> None:
     case = synthetic_case("no_signal", tmp_path / "x.parquet")
     case.thresholds.limited_metric = 0.2
     case.thresholds.maximum_dispersion = 0.15
@@ -306,7 +460,12 @@ def test_low_unstable_baseline_and_weak_permutation_are_all_opposing(tmp_path) -
         ]
     )
 
-    row = capability_matrix(experiments, case, {}, audits={}, overlap_results={})[0]
+    audits = {
+        "independence": {
+            "entities": {"participant": {"conflicting_target_entities": target_conflicts}}
+        }
+    }
+    row = capability_matrix(experiments, case, {}, audits=audits, overlap_results={})[0]
 
     assert row["status"] == "INSUFFICIENT_EVIDENCE"
     assert row["numbers"]["permutation_p_value"] == 0.3
@@ -314,12 +473,15 @@ def test_low_unstable_baseline_and_weak_permutation_are_all_opposing(tmp_path) -
     assert not any("median spearman=0.195" in value for value in row["evidence_supporting"])
     assert "Permutation separation is insufficient." in row["unmet_assumptions"]
     assert (
-        "The controlled baseline is below the configured useful metric." in row["unmet_assumptions"]
+        "The controlled baseline does not meet the configured usefulness threshold."
+        in row["unmet_assumptions"]
     )
     assert "Performance is unstable across the evaluated splits." in row["unmet_assumptions"]
+    assert "Localize the weak target or split boundary" in row["cheapest_next_evidence"]
 
 
-def test_random_split_repeating_bootstrap_units_caps_support(tmp_path) -> None:
+@pytest.mark.parametrize("target_conflicts", [0, 1])
+def test_random_split_repeating_bootstrap_units_caps_support(tmp_path, target_conflicts) -> None:
     case = synthetic_case("no_signal", tmp_path / "x.parquet")
     case.entities = {"participant": EntitySpec(id_column="subject_id")}
     case.evaluation.bootstrap_unit = "subject_id"
@@ -332,11 +494,16 @@ def test_random_split_repeating_bootstrap_units_caps_support(tmp_path) -> None:
         }
     }
 
+    audits = {
+        "independence": {
+            "entities": {"participant": {"conflicting_target_entities": target_conflicts}}
+        }
+    }
     row = capability_matrix(
         _supported_experiments("random_record", "random"),
         case,
         {},
-        audits={},
+        audits=audits,
         overlap_results=overlap,
     )[0]
 

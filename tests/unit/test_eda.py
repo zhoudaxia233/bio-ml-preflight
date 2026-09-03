@@ -150,14 +150,14 @@ def test_eda_refuses_a_holdout_enabled_case_before_reading_data(tmp_path: Path) 
         run_eda(case, tmp_path / "eda")
 
 
-def test_eda_handles_categorical_targets_with_replicate_metadata(tmp_path: Path) -> None:
+def test_categorical_label_repeats_do_not_claim_measurement_reliability(tmp_path: Path) -> None:
     data_path = tmp_path / "categorical.tsv"
     pd.DataFrame(
         {
-            "sample_id": ["a", "a", "b", "b"],
-            "replicate_id": ["a-1", "a-1", "b-1", "b-1"],
-            "x": [1.0, 1.1, 2.0, 2.1],
-            "label": ["case", "case", "control", "control"],
+            "sample_id": ["a", "a", "b"],
+            "replicate_id": ["a-1", "a-1", "b-1"],
+            "x": [1.0, 1.1, 2.0],
+            "label": [0, 1, 1],
         }
     ).to_csv(data_path, sep="\t", index=False)
     case = CaseSpec(
@@ -176,9 +176,31 @@ def test_eda_handles_categorical_targets_with_replicate_metadata(tmp_path: Path)
 
     payload = run_eda(case, tmp_path / "eda")
 
-    assert payload["audits"]["measurement"]["status"] == "ASSESSED"
-    assert payload["audits"]["measurement"]["within_group_dispersion_median"] is None
-    assert "rank_consistency_proxy" not in payload["audits"]["measurement"]
+    measurement = payload["audits"]["measurement"]
+    assert measurement["status"] == "NOT_ASSESSABLE"
+    assert measurement["label_consistency_assessed"] is True
+    assert measurement["conflicting_label_rate"] == 1.0
+    assert "class labels" in measurement["reason"]
+
+
+def test_eda_blocks_when_required_role_confirmations_are_missing(tmp_path: Path) -> None:
+    data_path = tmp_path / "observations.csv"
+    pd.DataFrame({"x": [1.0, 2.0, 3.0], "y": [0.0, 1.0, 2.0]}).to_csv(data_path, index=False)
+    case = CaseSpec(
+        case_id="missing-confirmations",
+        data=DataSpec(path=str(data_path)),
+        task=TaskSpec(kind="regression", prediction_unit="sample", target_column="y"),
+        features=FeatureSpec(include=["x"]),
+        generalization_scenarios=[ScenarioSpec(name="random", strategy="random")],
+        role_confirmation={"target": True},
+    )
+
+    payload = run_eda(case, tmp_path / "eda")
+
+    assert payload["readiness"]["status"] == "BLOCKED"
+    finding = next(row for row in payload["findings"] if row["code"] == "unconfirmed_roles")
+    assert finding["status"] == "ACTION_REQUIRED"
+    assert "entities, features, prediction_unit" in finding["evidence"]
 
 
 @pytest.mark.parametrize(
@@ -213,7 +235,12 @@ def test_readiness_distinguishes_missing_values_from_non_finite_modeled_values()
         entities={"sample": EntitySpec(id_column="sample_id")},
         features=FeatureSpec(include=["x"], post_outcome=["context"]),
         generalization_scenarios=[ScenarioSpec(name="random", strategy="random")],
-        role_confirmation={"target": True, "prediction_unit": True, "features": True},
+        role_confirmation={
+            "target": True,
+            "prediction_unit": True,
+            "features": True,
+            "entities": True,
+        },
     )
     missing_feature = pd.DataFrame(
         {
@@ -275,7 +302,12 @@ def test_one_class_binary_target_and_conflicting_entity_pairs_block_readiness() 
         },
         features=FeatureSpec(include=["x"]),
         generalization_scenarios=[ScenarioSpec(name="random", strategy="random")],
-        role_confirmation={"target": True, "prediction_unit": True, "features": True},
+        role_confirmation={
+            "target": True,
+            "prediction_unit": True,
+            "features": True,
+            "entities": True,
+        },
     )
     one_class = pd.DataFrame(
         {
@@ -320,7 +352,12 @@ def test_binary_target_requires_numeric_zero_one_encoding(labels: list[object]) 
         ),
         features=FeatureSpec(include=["x"]),
         generalization_scenarios=[ScenarioSpec(name="random", strategy="random")],
-        role_confirmation={"target": True, "prediction_unit": True, "features": True},
+        role_confirmation={
+            "target": True,
+            "prediction_unit": True,
+            "features": True,
+            "entities": True,
+        },
     )
     frame = pd.DataFrame({"x": [1.0, 2.0, 3.0], "y": labels})
 
@@ -362,7 +399,12 @@ def test_continuous_targets_must_be_numeric_and_nonconstant(kind: str) -> None:
         task=TaskSpec(kind=kind, prediction_unit="sample", target_column="y"),
         features=FeatureSpec(include=["x"]),
         generalization_scenarios=[ScenarioSpec(name="random", strategy="random")],
-        role_confirmation={"target": True, "prediction_unit": True, "features": True},
+        role_confirmation={
+            "target": True,
+            "prediction_unit": True,
+            "features": True,
+            "entities": True,
+        },
     )
 
     non_numeric = pd.DataFrame({"x": [1.0, 2.0, 3.0], "y": ["low", "high", "low"]})
@@ -397,7 +439,12 @@ def test_automatic_feature_selection_excludes_controls_and_explicit_leakage_bloc
             ScenarioSpec(name="supplied", strategy="supplied", split_column="split")
         ],
         evaluation=EvaluationSpec(bootstrap_unit="bootstrap_id"),
-        role_confirmation={"target": True, "prediction_unit": True, "features": True},
+        role_confirmation={
+            "target": True,
+            "prediction_unit": True,
+            "features": True,
+            "entities": True,
+        },
     )
 
     assert model_feature_columns(columns, case) == ["x"]

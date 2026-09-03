@@ -21,6 +21,8 @@ def capability_matrix(
     overlap_results: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     primary = case.evaluation.primary_metric
+    higher_is_better = primary not in {"mae", "rmse", "log_loss"}
+    direction = 1 if higher_is_better else -1
     usable = experiments[experiments["model"].ne("dummy")]
     random_values = usable[
         usable["strategy"].isin(["random", "random_pair"]) & usable["permuted"].eq(False)
@@ -53,7 +55,7 @@ def capability_matrix(
                 )
             )
             continue
-        best_model = str(by_model.idxmax())
+        best_model = str((direction * by_model).idxmax())
         best = real[real["model"].eq(best_model)][primary].dropna()
         perm = control[control["model"].eq(best_model)][primary].dropna()
         metric = float(best.median())
@@ -65,12 +67,16 @@ def capability_matrix(
             )
         else:
             null_statistics = perm.tolist()
-        permutation_summary = empirical_permutation_summary(metric, null_statistics)
+        permutation_summary = empirical_permutation_summary(
+            metric, null_statistics, higher_is_better=higher_is_better
+        )
         permutation = permutation_summary["median"]
-        delta = metric - permutation if permutation is not None else None
+        # Raw metric units are preserved; positive delta always means improvement.
+        delta = direction * (metric - permutation) if permutation is not None else None
         permutation_p_value = permutation_summary["p_value"]
         numbers = {
             "primary_metric": primary,
+            "primary_metric_higher_is_better": higher_is_better,
             "median": metric,
             "dispersion": dispersion,
             "best_model": best_model,
@@ -80,7 +86,9 @@ def capability_matrix(
             "permutation_p_value": permutation_p_value,
             "permutation_draws": permutation_summary["draws"],
         }
-        low_metric = metric < case.thresholds.limited_metric
+        if not higher_is_better:
+            numbers["permutation_q05"] = permutation_summary["q05"]
+        low_metric = direction * metric < direction * case.thresholds.limited_metric
         high_dispersion = dispersion > case.thresholds.maximum_dispersion
         metric_evidence = f"Best baseline median {primary}={metric:.3f} ({best_model})."
         evidence_for = [] if low_metric else [metric_evidence]
@@ -116,14 +124,16 @@ def capability_matrix(
         if weak_permutation:
             unmet.append("Permutation separation is insufficient.")
         if low_metric:
-            unmet.append("The controlled baseline is below the configured useful metric.")
+            unmet.append(
+                "The controlled baseline does not meet the configured usefulness threshold."
+            )
         if high_dispersion:
             unmet.append("Performance is unstable across the evaluated splits.")
         leakage_contradiction = (
             scenario.strategy not in {"random", "random_pair"}
             and random_median is not None
-            and random_median >= case.thresholds.supported_metric
-            and metric < case.thresholds.limited_metric
+            and direction * random_median >= direction * case.thresholds.supported_metric
+            and low_metric
         )
         if leakage_contradiction:
             status = "CONTRADICTED"
@@ -150,7 +160,10 @@ def capability_matrix(
                 next_step = (
                     "Add independent units along this scenario, then repeat the fixed validation."
                 )
-        elif metric >= case.thresholds.supported_metric and not high_dispersion:
+        elif (
+            direction * metric >= direction * case.thresholds.supported_metric
+            and not high_dispersion
+        ):
             status = "SUPPORTED"
             next_step = "Confirm once on a prospectively reserved or pseudo-sealed external set."
         else:
@@ -368,11 +381,15 @@ def _apply_audit_limits(
             f"{target_conflicts} identical prediction units have conflicting targets."
         )
         verdict["numbers"]["conflicting_target_entities"] = target_conflicts
+        verdict["unmet_assumptions"].append(
+            "Target consistency within declared prediction units requires review."
+        )
     if representation_conflicts:
         verdict["evidence_against"].append(
             f"{representation_conflicts} entity identifiers map to inconsistent representations."
         )
         verdict["numbers"]["inconsistent_representation_entities"] = representation_conflicts
+        verdict["unmet_assumptions"].append("Entity-to-representation consistency requires review.")
     exact_overlap = int(overlap.get("exact_duplicate_overlap", 0))
     pair_overlap = int(overlap.get("pair_overlap", 0))
     protected_overlap = int(overlap.get("protected_entity_overlap_count", 0))
@@ -396,18 +413,22 @@ def _apply_audit_limits(
         )
         verdict["numbers"]["protected_entity_overlap_count"] = protected_overlap
         verdict["numbers"]["protected_entity_overlap_fraction"] = fraction
-    if not any(
-        [target_conflicts, representation_conflicts, exact_overlap, pair_overlap, protected_overlap]
-    ):
+    actions = []
+    if target_conflicts or representation_conflicts:
+        actions.append("Review conflicting entity records under the declared identity policy.")
+    if exact_overlap or pair_overlap or protected_overlap:
+        verdict["unmet_assumptions"].append(
+            "The evaluated train/test independence boundary has overlap."
+        )
+        actions.append(
+            "Use overlap-free split manifests for any new validation; "
+            "do not reuse a consumed holdout."
+        )
+    if not actions:
         return
     if verdict["status"] == "SUPPORTED":
         verdict["status"] = "SUPPORTED_WITH_LIMITS"
-    verdict["unmet_assumptions"].append(
-        "Entity identity, target consistency, and split isolation must be resolved."
-    )
-    verdict["cheapest_next_evidence"] = (
-        "Resolve conflicting entity records and regenerate overlap-free split manifests."
-    )
+    verdict["cheapest_next_evidence"] = " ".join([*actions, verdict["cheapest_next_evidence"]])
 
 
 def _apply_test_class_limit(
@@ -458,15 +479,32 @@ def _measurement_verdict(measurement: dict[str, Any]) -> dict[str, Any]:
             {key: value for key, value in measurement.items() if key != "status"},
         )
     reason = str(measurement.get("reason", "Replicate evidence was not supplied."))
+    details = {
+        key: value
+        for key, value in measurement.items()
+        if key not in {"status", "reason", "unmet_assumption", "cheapest_next_evidence"}
+    }
     return _verdict(
         "measurement reliability",
         "NOT_ASSESSABLE",
         [],
         [reason],
         "Within- and between-replicate variation cannot be separated.",
-        ["Technical or biological replicate identifiers are missing."],
-        "Add replicate identifiers or repeat a representative subset before confirmation.",
-        {},
+        [
+            str(
+                measurement.get(
+                    "unmet_assumption",
+                    "Technical or biological replicate identifiers are missing.",
+                )
+            )
+        ],
+        str(
+            measurement.get(
+                "cheapest_next_evidence",
+                "Add replicate identifiers or repeat a representative subset before confirmation.",
+            )
+        ),
+        details,
     )
 
 

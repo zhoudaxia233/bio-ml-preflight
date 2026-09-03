@@ -18,9 +18,18 @@ Entity identity conflicts are resolved before feature generation through an expl
 
 Regression reports MAE, RMSE, Pearson, Spearman, and Kendall. Classification reports balanced accuracy, ROC-AUC and average precision when valid, plus log loss. Grouped rankings add Spearman and NDCG where numeric target relevance supports it. Top-k Jaccard, selection probabilities, unstable-membership fraction, and rank standard deviation expose decisions hidden by global error.
 
-Group-respecting permutations move label blocks between equal-sized independent groups (or shuffle within the sole block). Each split/model now samples nine deterministic null draws. Capability evidence reports the null median, 95th percentile, and the corrected empirical upper-tail p-value instead of treating one chance null fit as representative. Bootstrap intervals resample configured independent units. Learning curves should use increasing counts of independent groups; v0.1 exposes the resampling primitive but does not claim a curve when group coverage is too small.
+Group-respecting permutations move label blocks between equal-sized independent groups (or shuffle within the sole block). Each split/model now samples nine deterministic null draws. Capability evidence reports the null median, 95th percentile, and the corrected empirical p-value instead of treating one chance null fit as representative. The test counts null results at least as good as the observed metric, including ties: upper tail for correlations/AUC/accuracy, lower tail for MAE/RMSE/log loss. Error-metric verdicts also expose the raw 5th percentile. Bootstrap intervals resample configured independent units. Learning curves should use increasing counts of independent groups; v0.1 exposes the resampling primitive but does not claim a curve when group coverage is too small.
 
 Capability thresholds live in the case. Verdict rules compare the best controlled baseline, permutation delta, split dispersion, ranking overlap, and random-versus-deployment scenario behavior. Each output carries supporting and opposing evidence, uncertainty, unmet assumptions, numbers, and the cheapest next evidence.
+
+MAE, RMSE and log loss are minimized; other supported primary metrics are maximized.
+Thresholds remain in raw metric units: for error metrics, `supported_metric` is a stricter
+maximum than `limited_metric` (for example, RMSE 1.0 and 1.5). For higher-is-better metrics
+they are minimums, with the supported threshold higher. A positive `permutation_delta`
+always means improvement: null minus observed error, or observed minus null score.
+This metric direction is separate from `task.higher_is_better`, which orders target values
+for ranking decisions. Nine draws only resolve p-values down to 0.10; benchmark use does
+not turn smoke diagnostics into confirmatory inference.
 
 Confirmatory cases can freeze a model allowlist in the case rather than select the best model from holdout outcomes. A supplied holdout may name a protected entity column; any train/test identity crossing then stops before fitting or manifest persistence. Enabled holdouts record access before target-dependent work in a stable ledger keyed by the dataset checksum, with the case fingerprint stored in every event; changing the report output or case parameters cannot bypass the limit, and an override requires an explicit audited reason. Binary cases may predeclare a minimum test count per class and the independent unit used for that count; a point estimate cannot pass the capability boundary when either holdout class falls below it.
 

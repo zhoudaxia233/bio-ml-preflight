@@ -72,6 +72,13 @@ uv run bio-ml-preflight demo parkinsons --budget smoke
 
 smoke 结果清楚显示了独立单位边界。随机记录诊断的 Spearman 中位数为 `0.599`（置换差值 `0.237`、经验 p 值 `0.10`），但 42 名参与者全部同时出现在训练和测试中，因此只能判为 `SUPPORTED_WITH_LIMITS`，不能作为未见参与者或独立记录时点的证据。源数据只有 2,501 个精确的“参与者—时间”代理组，5,875 条记录中有 4,904 条属于重复代理组。两个按参与者整组留出的 smoke 切分均无参与者重叠，Spearman 中位数降至 `0.195`，置换差值 `0.070`、p 值 `0.30`、跨切分标准差 `0.158`；报告会同时记录这三项限制，结论为 `INSUFFICIENT_EVIDENCE`。测量可靠性与批次混杂仍为 `NOT_ASSESSABLE`。这是回顾性结果，不证明未来时间外推、临床效用或因果效应。
 
+## MoleculeNet ESOL 回归检查
+
+[ESOL 示例](examples/esol/README.md) 使用固定校验和的公开 1,128 条溶解度记录，
+复用普通表格流程和现有 Morgan、线性与树基线，检查 RMSE 的“越小越好”方向、
+结构身份冲突，以及随机记录与 scaffold 泛化边界。不新增依赖或运行时适配器；
+这是固定协议的回顾性流程验证，不是复现榜单分数。
+
 ## 跑 BBB_Martins 分子二分类 Demo
 
 使用 SMILES 预测二分类 BBB 标签，并比较随机化合物与 scaffold 隔离验证：
