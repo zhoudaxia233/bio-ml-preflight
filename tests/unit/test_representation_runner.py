@@ -152,7 +152,9 @@ def test_supplied_split_exclusions_are_not_feature_built_or_predicted(
         )
         output = tmp_path / name
         result = runner_module.run_case(case, output, model_allowlist={"elastic_net"})
-        prediction = pd.read_parquet(next((output / "predictions").glob("*.parquet")))
+        prediction = pd.read_parquet(
+            output / "predictions" / "supplied__declared_features__elastic_net__seed-11.parquet"
+        )
         assert set(prediction["_row_id"]) == {0, 1, 3, 4, 5, 6}
         return result
 
