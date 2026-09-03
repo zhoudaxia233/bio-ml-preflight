@@ -136,6 +136,11 @@ def test_pairwise_target_variation_is_not_an_entity_label_conflict(tmp_path) -> 
     assert "conflicting_target_entities" not in result["entities"]["target"]
     assert result["pair_structure"]["conflicting_label_pairs"] == 0
 
+    case.task.prediction_unit = "compound"
+    result = audit_dataset(frame, case)["independence"]
+    assert result["entities"]["compound"]["conflicting_target_entities"] == 2
+    assert "conflicting_target_entities" not in result["entities"]["target"]
+
 
 def test_identity_conflicts_require_an_explicit_policy(tmp_path) -> None:
     frame = pd.DataFrame(
@@ -184,14 +189,52 @@ def test_exclude_policy_removes_every_conflicting_identity(tmp_path) -> None:
     }
 
 
-def test_aggregate_policy_averages_regression_targets(tmp_path) -> None:
+def test_identity_policy_scope_does_not_inspect_holdout_targets(tmp_path) -> None:
     frame = pd.DataFrame(
-        {"compound_id": ["a", "a", "b"], "smiles": ["CC", "CC", "CN"], "y": [1.0, 3.0, 4.0]}
+        {
+            "compound_id": ["a", "a", "b", "c"],
+            "x": [0.0, 1.0, 2.0, 3.0],
+            "y": [0, 1, 1, 0],
+            "split": ["train", "holdout", "train", "holdout"],
+        }
     )
     case = synthetic_case("no_signal", tmp_path / "unused.parquet")
     case.task.target_column = "y"
     case.task.prediction_unit = "compound"
-    case.features.include = ["smiles"]
+    case.features.include = ["x"]
+    case.entities = {
+        "compound": EntitySpec(
+            id_column="compound_id",
+            identity_conflict_policy="exclude",
+        )
+    }
+
+    resolved, result = apply_identity_conflict_policies(
+        frame,
+        case,
+        policy_indices=pd.Index([0, 2]),
+    )
+
+    pd.testing.assert_frame_equal(resolved, frame)
+    assert result["policy_scope_rows"] == 2
+    assert result["status"] == "NO_CONFLICTS"
+    assert result["entities"]["compound"]["affected_entities"] == 0
+
+
+def test_aggregate_policy_averages_regression_targets(tmp_path) -> None:
+    frame = pd.DataFrame(
+        {
+            "compound_id": ["a", "a", "b"],
+            "smiles": ["CC", "CC", "CN"],
+            "ignored": ["left", "right", "only"],
+            "y": [1.0, 3.0, 4.0],
+        }
+    )
+    case = synthetic_case("no_signal", tmp_path / "unused.parquet")
+    case.task.target_column = "y"
+    case.task.prediction_unit = "compound"
+    case.features.include = ["smiles", "ignored"]
+    case.features.exclude = ["ignored"]
     case.entities = {
         "compound": EntitySpec(
             id_column="compound_id",
@@ -202,8 +245,8 @@ def test_aggregate_policy_averages_regression_targets(tmp_path) -> None:
 
     resolved, result = apply_identity_conflict_policies(frame, case)
     assert resolved.to_dict("records") == [
-        {"compound_id": "a", "smiles": "CC", "y": 2.0},
-        {"compound_id": "b", "smiles": "CN", "y": 4.0},
+        {"compound_id": "a", "smiles": "CC", "ignored": "left", "y": 2.0},
+        {"compound_id": "b", "smiles": "CN", "ignored": "only", "y": 4.0},
     ]
     assert result["entities"]["compound"]["aggregated_rows"] == 1
 
@@ -233,6 +276,7 @@ def test_grouping_by_representation_cannot_split_one_identity_across_folds(tmp_p
         ScenarioSpec(name="heldout", strategy="group", group_column="smiles")
     ]
     case.evaluation.seeds = [23]
+    case.evaluation.bootstrap_unit = "compound_id"
 
     with pytest.raises(ValueError, match="identifiers cross train and test"):
         run_case(case, tmp_path / "report", model_allowlist={"dummy"})
@@ -244,7 +288,7 @@ def test_supplied_holdout_cannot_reuse_a_protected_identity(tmp_path) -> None:
             "compound_id": ["a", "a", "b", "c", "d", "e"],
             "smiles": ["CC", "CC", "CO", "CN", "CF", "CCl"],
             "split": ["train", "holdout", "train", "train", "holdout", "holdout"],
-            "y": [0, 0, 1, 0, 1, 0],
+            "y": [0, 1, 1, 0, 1, 0],
         }
     )
     path = tmp_path / "compounds.parquet"
@@ -257,7 +301,7 @@ def test_supplied_holdout_cannot_reuse_a_protected_identity(tmp_path) -> None:
         "compound": EntitySpec(
             id_column="compound_id",
             representation_column="smiles",
-            identity_conflict_policy="keep",
+            identity_conflict_policy="exclude",
         )
     }
     case.generalization_scenarios = [
@@ -269,6 +313,7 @@ def test_supplied_holdout_cannot_reuse_a_protected_identity(tmp_path) -> None:
         )
     ]
     case.evaluation.seeds = [11]
+    case.evaluation.bootstrap_unit = "compound_id"
 
     with pytest.raises(ValueError, match="identifiers cross train and test"):
         run_case(case, tmp_path / "report", model_allowlist={"dummy"})

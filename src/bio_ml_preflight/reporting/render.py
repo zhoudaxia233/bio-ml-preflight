@@ -18,6 +18,14 @@ Generated from structured artifacts. This retrospective preflight does not prove
 - Generalization scenarios: {{ scenarios }}.
 - Decision: `{{ case.decision.kind }}`.
 
+Pre-model readiness:
+
+{{ pre_model_readiness }}
+
+Readiness findings:
+
+{{ pre_model_findings }}
+
 ## 2. Data inventory
 
 {{ inventory }}
@@ -134,7 +142,10 @@ Task: <code>{{ case.task.kind }}</code> for prediction unit
 <li>Target: <code>{{ case.task.target_column }}</code>.</li>
 <li>Generalization scenarios: {{ scenarios }}.</li>
 <li>Decision: <code>{{ case.decision.kind }}</code>.</li>
-</ul></section>
+</ul>
+<h3>Pre-model readiness</h3><pre><code>{{ pre_model_readiness_json }}</code></pre>
+<p>Readiness findings:</p><pre><code>{{ pre_model_findings_json }}</code></pre>
+</section>
 <section><h2>2. Data inventory</h2>
 <pre><code>{{ inventory_json }}</code></pre>
 <p>Cached dataset source record (when supplied):</p>
@@ -294,6 +305,8 @@ def write_report(
     context = {
         "case": case,
         "scenarios": ", ".join(scenario.name for scenario in case.generalization_scenarios),
+        "pre_model_readiness": _pretty(structured["pre_model_readiness"]),
+        "pre_model_findings": _pretty(structured["pre_model_findings"]),
         "inventory": _pretty(structured["audits"]["inventory"]),
         "dataset_source": _pretty(structured.get("dataset_source", {})),
         "identity_consistency": _pretty(structured["audits"]["identity_consistency"]),
@@ -340,6 +353,12 @@ def write_report(
     )
     (output / "report.md").write_text(markdown, encoding="utf-8")
     json_context = {
+        "pre_model_readiness_json": json.dumps(
+            structured["pre_model_readiness"], indent=2, sort_keys=True
+        ),
+        "pre_model_findings_json": json.dumps(
+            structured["pre_model_findings"], indent=2, sort_keys=True
+        ),
         "inventory_json": json.dumps(structured["audits"]["inventory"], indent=2, sort_keys=True),
         "dataset_source_json": json.dumps(
             structured.get("dataset_source", {}), indent=2, sort_keys=True

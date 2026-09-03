@@ -55,28 +55,62 @@ def build_feature_frames(frame: pd.DataFrame, case: CaseSpec) -> dict[str, pd.Da
     }
 
 
+def model_feature_columns(columns: Iterable[object], case: CaseSpec) -> list[str]:
+    """Resolve the exact columns that feature construction will model."""
+    available = [str(column) for column in columns]
+    if case.features.include:
+        return [column for column in case.features.include if column not in case.features.exclude]
+
+    reserved = {
+        case.task.target_column,
+        *case.features.exclude,
+        *case.features.post_outcome,
+    }
+    reserved.update(entity.id_column for entity in case.entities.values())
+    if case.evaluation.bootstrap_unit:
+        reserved.add(case.evaluation.bootstrap_unit)
+    if case.decision.group_entity:
+        reserved.add(
+            case.entities[case.decision.group_entity].id_column
+            if case.decision.group_entity in case.entities
+            else case.decision.group_entity
+        )
+    reserved.update(
+        column
+        for column in [
+            case.metadata.replicate_id,
+            case.metadata.biological_replicate_id,
+            case.metadata.batch_id,
+            case.metadata.plate_id,
+            case.metadata.time_column,
+            case.metadata.treatment_column,
+        ]
+        if column
+    )
+    for scenario in case.generalization_scenarios:
+        reserved.update(
+            column
+            for column in [
+                scenario.group_column,
+                scenario.left_column,
+                scenario.right_column,
+                scenario.split_column,
+            ]
+            if column
+        )
+    return [column for column in available if column not in reserved]
+
+
 def build_feature_frame(
     frame: pd.DataFrame,
     case: CaseSpec,
     *,
     molecular_representation: str | None = None,
 ) -> pd.DataFrame:
-    if case.features.include:
-        missing = sorted(set(case.features.include) - set(frame.columns))
-        if missing:
-            raise ValueError(f"Configured feature columns are missing: {missing}")
-        columns = [
-            column for column in case.features.include if column not in case.features.exclude
-        ]
-    else:
-        reserved = {case.task.target_column, *case.features.exclude}
-        reserved.update(entity.id_column for entity in case.entities.values())
-        reserved.update(
-            value
-            for value in case.metadata.model_dump().values()
-            if isinstance(value, str) and value in frame.columns
-        )
-        columns = [str(column) for column in frame.columns if str(column) not in reserved]
+    columns = model_feature_columns(frame.columns, case)
+    missing = sorted(set(columns) - set(frame.columns))
+    if missing:
+        raise ValueError(f"Configured feature columns are missing: {missing}")
     features = frame.loc[:, columns].reset_index(drop=True).copy()
     representations = {
         entity.representation_column

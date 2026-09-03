@@ -11,6 +11,7 @@ from jinja2 import BaseLoader, Environment
 from bio_ml_preflight.audits import audit_dataset
 from bio_ml_preflight.contracts import CaseSpec
 from bio_ml_preflight.data import read_table
+from bio_ml_preflight.features import model_feature_columns
 
 HTML_TEMPLATE = """<!doctype html>
 <html lang="en">
@@ -28,6 +29,7 @@ table{border-collapse:collapse;width:100%;font-size:.9rem}td,th{border:1px solid
 padding:.5rem;text-align:left;vertical-align:top}th{background:#eef2f6}
 .ACTION_REQUIRED{color:#b42318;font-weight:700}.WARNING{color:#9c5d00;font-weight:700}
 .NOT_ASSESSABLE{color:#6b7280;font-weight:700}.INFO{color:#087f5b;font-weight:700}
+.BLOCKED{color:#b42318}.READY_WITH_LIMITS{color:#9c5d00}.READY{color:#087f5b}
 img{display:block;max-width:100%;height:auto;margin:1rem auto}code{font-family:ui-monospace,
 SFMono-Regular,Menlo,monospace}small{color:#52606d}
 </style>
@@ -40,6 +42,8 @@ biological meaning was inferred from column names.</p></header>
 <li>Rows loaded: {{ scope.rows_loaded }}; rows profiled: {{ scope.rows_profiled }}.</li>
 <li>Non-training supplied-split rows excluded: {{ scope.non_training_rows_excluded }}.</li>
 <li>Locked holdout labels accessed: <strong>no</strong>.</li>
+<li>Pre-model readiness: <strong class="{{ readiness.status }}">{{ readiness.status }}</strong>.
+{{ readiness.interpretation }}</li>
 </ul></section>
 <section><h2>Findings and cheapest next evidence</h2>
 <table><thead><tr><th>Status</th><th>Check</th><th>Evidence</th><th>Next evidence</th></tr>
@@ -76,11 +80,12 @@ def run_eda(case: CaseSpec, output: Path) -> dict[str, Any]:
             "locked holdout rows"
         )
     frame = read_table(Path(case.data.path)).reset_index(drop=True)
-    _validate_declared_columns(frame, case)
-    development, excluded = _development_rows(frame, case)
+    validate_declared_columns(frame, case)
+    development, excluded = development_rows(frame, case)
     audits = audit_dataset(development, case)
     profile = _column_profile(development, case)
-    findings = _findings(audits, case)
+    findings = readiness_findings(audits, case)
+    readiness = assess_readiness(findings)
     source_record_path = Path(case.data.path).parent / "source.json"
     source_record = (
         json.loads(source_record_path.read_text(encoding="utf-8"))
@@ -102,6 +107,7 @@ def run_eda(case: CaseSpec, output: Path) -> dict[str, Any]:
             "dataset_source": source_record,
             "audits": audits,
             "findings": findings,
+            "readiness": readiness,
             "column_profile_artifact": "column_profile.parquet",
         }
     )
@@ -119,7 +125,7 @@ def run_eda(case: CaseSpec, output: Path) -> dict[str, Any]:
     return cast(dict[str, Any], structured)
 
 
-def _validate_declared_columns(frame: pd.DataFrame, case: CaseSpec) -> None:
+def validate_declared_columns(frame: pd.DataFrame, case: CaseSpec) -> None:
     required = {case.task.target_column, *case.features.include, *case.features.post_outcome}
     required.update(case.data.fingerprint_columns)
     for entity in case.entities.values():
@@ -156,19 +162,43 @@ def _validate_declared_columns(frame: pd.DataFrame, case: CaseSpec) -> None:
         raise ValueError(f"Case references missing declared columns: {missing}")
 
 
-def _development_rows(frame: pd.DataFrame, case: CaseSpec) -> tuple[pd.DataFrame, int]:
-    mask = pd.Series(True, index=frame.index)
-    split_columns = {
-        scenario.split_column
-        for scenario in case.generalization_scenarios
-        if scenario.strategy == "supplied" and scenario.split_column
-    }
-    for column in split_columns:
-        mask &= frame[column].astype(str).str.lower().eq("train")
-    development = frame.loc[mask].copy()
-    if development.empty:
+def development_row_indices(
+    frame: pd.DataFrame,
+    case: CaseSpec,
+    *,
+    require_consistent: bool = False,
+) -> pd.Index:
+    if any(scenario.strategy != "supplied" for scenario in case.generalization_scenarios):
+        return frame.index
+
+    split_columns = list(
+        dict.fromkeys(
+            scenario.split_column
+            for scenario in case.generalization_scenarios
+            if scenario.split_column
+        )
+    )
+    missing = sorted(set(split_columns) - set(frame.columns))
+    if missing:
+        raise ValueError(f"Case references missing supplied split columns: {missing}")
+    train_masks = [frame[column].astype(str).str.lower().eq("train") for column in split_columns]
+    if (case.holdout.enabled or require_consistent) and any(
+        not mask.equals(train_masks[0]) for mask in train_masks[1:]
+    ):
+        raise ValueError("Supplied splits must use one consistent training boundary")
+    mask = pd.Series(False, index=frame.index)
+    for train_mask in train_masks:
+        mask |= train_mask
+    indices = frame.index[mask]
+    if indices.empty:
         raise ValueError("No development rows remain after excluding supplied test/holdout rows")
-    return development.reset_index(drop=True), int((~mask).sum())
+    return indices
+
+
+def development_rows(frame: pd.DataFrame, case: CaseSpec) -> tuple[pd.DataFrame, int]:
+    indices = development_row_indices(frame, case)
+    development = frame.loc[indices].copy()
+    return development.reset_index(drop=True), len(frame) - len(development)
 
 
 def _column_profile(frame: pd.DataFrame, case: CaseSpec) -> pd.DataFrame:
@@ -241,15 +271,15 @@ def _column_roles(case: CaseSpec) -> dict[str, list[str]]:
     return roles
 
 
-def _findings(audits: dict[str, Any], case: CaseSpec) -> list[dict[str, str]]:
-    inventory = audits["inventory"]
-    independence = audits["independence"]
+def declaration_findings(case: CaseSpec) -> list[dict[str, str]]:
+    """Return readiness findings that can be decided without reading the dataset."""
     findings: list[dict[str, str]] = []
 
-    def add(status: str, check: str, evidence: str, next_evidence: str) -> None:
+    def add(status: str, code: str, check: str, evidence: str, next_evidence: str) -> None:
         findings.append(
             {
                 "status": status,
+                "code": code,
                 "check": check,
                 "evidence": evidence,
                 "cheapest_next_evidence": next_evidence,
@@ -260,47 +290,155 @@ def _findings(audits: dict[str, Any], case: CaseSpec) -> list[dict[str, str]]:
     if unconfirmed:
         add(
             "ACTION_REQUIRED",
+            "unconfirmed_roles",
             "case roles",
             f"Unconfirmed roles: {', '.join(unconfirmed)}.",
             "Have a researcher confirm the target, prediction unit, features, and entities.",
         )
-    target_missing = int(inventory["missing"].get(case.task.target_column, 0))
-    if target_missing:
+
+    configured_features = set(model_feature_columns(case.features.include, case))
+    if case.features.include and not configured_features:
         add(
             "ACTION_REQUIRED",
-            "target completeness",
-            f"The declared target has {target_missing} missing values.",
-            "Declare and document a target inclusion rule before model fitting.",
+            "no_modeled_features",
+            "modeled feature availability",
+            "No modeled feature column remains after applying declared exclusions.",
+            "Declare at least one predictor that is available at prediction time.",
         )
+    if case.task.target_column in configured_features:
+        add(
+            "ACTION_REQUIRED",
+            "target_modeled_as_feature",
+            "target leakage",
+            f"The declared target {case.task.target_column!r} is also a modeled feature.",
+            "Remove the target from features.include before model fitting.",
+        )
+
+    modeled_post_outcome = sorted(set(case.features.post_outcome) & configured_features)
+    if case.features.post_outcome:
+        add(
+            "ACTION_REQUIRED" if modeled_post_outcome else "INFO",
+            (
+                "post_outcome_modeled_as_feature"
+                if modeled_post_outcome
+                else "declared_post_outcome_context"
+            ),
+            "declared post-outcome fields",
+            f"Declared post-outcome columns: {case.features.post_outcome}; also modeled: "
+            f"{modeled_post_outcome}.",
+            "Keep these columns out of predictors and retain them only as declared audit context.",
+        )
+    return findings
+
+
+def readiness_findings(
+    audits: dict[str, Any],
+    case: CaseSpec,
+    *,
+    allow_pending_identity_policies: bool = True,
+) -> list[dict[str, str]]:
+    inventory = audits["inventory"]
+    independence = audits["independence"]
+    findings = declaration_findings(case)
+    modeled_features = set(audits["leakage"]["modeled_features"])
+
+    def add(status: str, code: str, check: str, evidence: str, next_evidence: str) -> None:
+        findings.append(
+            {
+                "status": status,
+                "code": code,
+                "check": check,
+                "evidence": evidence,
+                "cheapest_next_evidence": next_evidence,
+            }
+        )
+
+    missing_modeled = audits["leakage"]["missing_modeled_features"]
+    if missing_modeled:
+        add(
+            "ACTION_REQUIRED",
+            "modeled_features_missing",
+            "modeled feature availability",
+            f"Configured modeled feature columns are missing: {missing_modeled}.",
+            "Correct the case declaration or restore the columns before model fitting.",
+        )
+    if (
+        not modeled_features
+        and not missing_modeled
+        and not any(row["code"] == "no_modeled_features" for row in findings)
+    ):
+        add(
+            "ACTION_REQUIRED",
+            "no_modeled_features",
+            "modeled feature availability",
+            "No modeled feature column remains after applying declared exclusions.",
+            "Declare at least one predictor that is available at prediction time.",
+        )
+
+    all_missing_modeled = sorted(
+        column
+        for column in modeled_features
+        if int(inventory["missing"].get(column, 0)) == int(inventory["rows"])
+    )
+    if modeled_features and set(all_missing_modeled) == modeled_features:
+        add(
+            "ACTION_REQUIRED",
+            "no_observed_modeled_features",
+            "modeled feature availability",
+            f"Every modeled feature is entirely missing: {all_missing_modeled}.",
+            "Restore at least one observed predictor before model fitting.",
+        )
+
+    findings.extend(target_readiness_findings(audits, case))
     if inventory["missing"]:
         add(
             "WARNING",
+            "missing_values",
             "missing values",
             f"Columns with missing values: {inventory['missing']}.",
             "Confirm why values are missing; fit any imputation inside training folds only.",
         )
-    if inventory["invalid_numeric_values"]:
+
+    invalid_numeric = inventory["invalid_numeric_values"]
+    modeled_invalid = {
+        column: invalid_numeric[column]
+        for column in sorted(set(invalid_numeric) & modeled_features - {case.task.target_column})
+    }
+    context_invalid = {
+        column: invalid_numeric[column]
+        for column in sorted(set(invalid_numeric) - modeled_features - {case.task.target_column})
+    }
+    if modeled_invalid:
         add(
             "ACTION_REQUIRED",
-            "invalid numeric values",
-            f"Non-finite numeric values: {inventory['invalid_numeric_values']}.",
-            "Trace non-finite values to the source and declare a handling rule.",
+            "non_finite_modeled_features",
+            "non-finite modeled features",
+            f"Modeled feature columns with infinite values: {modeled_invalid}.",
+            "Trace infinite values to the source and declare a fold-safe handling rule.",
+        )
+    if context_invalid:
+        add(
+            "WARNING",
+            "non_finite_context",
+            "non-finite audit context",
+            f"Non-modeled numeric columns with infinite values: {context_invalid}.",
+            "Review source encoding; these columns remain excluded from model fitting.",
         )
     if inventory["duplicate_rows"]:
         add(
             "WARNING",
+            "duplicate_rows",
             "duplicate rows",
             f"Found {inventory['duplicate_rows']} exact duplicate rows.",
             "Determine whether they are technical repeats, legitimate replicates, or "
             "ingestion errors.",
         )
-    modeled_constants = sorted(set(inventory["constant_columns"]) & set(case.features.include))
-    modeled_near_constants = sorted(
-        set(inventory["near_constant_columns"]) & set(case.features.include)
-    )
+    modeled_constants = sorted(set(inventory["constant_columns"]) & modeled_features)
+    modeled_near_constants = sorted(set(inventory["near_constant_columns"]) & modeled_features)
     if modeled_constants or modeled_near_constants:
         add(
             "WARNING",
+            "uninformative_modeled_features",
             "uninformative modeled features",
             f"Constant: {modeled_constants}; near-constant: {modeled_near_constants}.",
             "Confirm coding and remove only after the feature role is reviewed.",
@@ -310,6 +448,7 @@ def _findings(audits: dict[str, Any], case: CaseSpec) -> list[dict[str, str]]:
         if missing_identifiers:
             add(
                 "ACTION_REQUIRED",
+                f"entity_identifier_missing:{name}",
                 f"entity identifier completeness {name}",
                 f"{missing_identifiers} rows lack the declared {name} identifier.",
                 "Recover the identifier or exclude those rows under a documented rule before "
@@ -318,6 +457,7 @@ def _findings(audits: dict[str, Any], case: CaseSpec) -> list[dict[str, str]]:
         if result.get("status") == "NOT_ASSESSABLE":
             add(
                 "NOT_ASSESSABLE",
+                f"entity_not_assessable:{name}",
                 f"entity {name}",
                 str(result.get("reason")),
                 "Supply the declared entity identifier.",
@@ -327,6 +467,7 @@ def _findings(audits: dict[str, Any], case: CaseSpec) -> list[dict[str, str]]:
         if repeats:
             add(
                 "WARNING",
+                f"repeated_entity:{name}",
                 f"repeated entity {name}",
                 f"{repeats} rows belong to identifiers that occur more than once; "
                 f"rows/entity={result.get('rows_per_entity')}.",
@@ -336,33 +477,40 @@ def _findings(audits: dict[str, Any], case: CaseSpec) -> list[dict[str, str]]:
         representations = int(result.get("inconsistent_representation_entities", 0))
         if conflicts or representations:
             policy = case.entities[name].identity_conflict_policy
+            acknowledged = policy == "keep" or (
+                allow_pending_identity_policies and policy in {"exclude", "aggregate"}
+            )
             add(
-                "ACTION_REQUIRED" if policy is None else "WARNING",
+                "WARNING" if acknowledged else "ACTION_REQUIRED",
+                f"identity_conflict:{name}",
                 f"identity consistency {name}",
                 f"Conflicting targets: {conflicts}; inconsistent representations: "
                 f"{representations}; declared policy: {policy}.",
                 "Review affected identities and explicitly keep, exclude, or aggregate them.",
             )
+    pair = independence["pair_structure"]
+    pair_conflicts = int(pair.get("conflicting_label_pairs", 0))
+    if pair.get("defines_prediction_unit") and pair_conflicts:
+        add(
+            "ACTION_REQUIRED",
+            "pair_target_conflict",
+            "pair identity consistency",
+            f"{pair_conflicts} declared entity pairs map to multiple target values.",
+            "Resolve replicate semantics or aggregate the pair target under a documented rule.",
+        )
     suspicious = audits["leakage"]["suspicious_identifier_features"]
     if suspicious:
         add(
             "WARNING",
+            "identifier_leakage",
             "identifier leakage",
             f"High-cardinality identifier-like modeled features: {suspicious}.",
             "Confirm these values are available at prediction time and cannot encode outcomes.",
         )
-    post_outcome = audits["leakage"]["declared_post_outcome_features"]
-    if post_outcome:
-        modeled_post_outcome = sorted(set(post_outcome) & set(case.features.include))
-        add(
-            "ACTION_REQUIRED" if modeled_post_outcome else "INFO",
-            "declared post-outcome fields",
-            f"Declared post-outcome columns: {post_outcome}; also modeled: {modeled_post_outcome}.",
-            "Keep these columns out of predictors and retain them only as declared audit context.",
-        )
     if audits["measurement"].get("status") == "NOT_ASSESSABLE":
         add(
             "NOT_ASSESSABLE",
+            "measurement_reliability_not_assessable",
             "measurement reliability",
             str(audits["measurement"].get("reason")),
             "Add replicate identifiers or repeated measurements under a declared protocol.",
@@ -370,17 +518,128 @@ def _findings(audits: dict[str, Any], case: CaseSpec) -> list[dict[str, str]]:
     for boundary in audits["missing_high_value_metadata"]:
         add(
             "NOT_ASSESSABLE",
+            "missing_high_value_metadata",
             "missing high-value metadata",
             boundary,
             "Add or document the missing metadata; do not infer it from column names.",
         )
     add(
         "INFO",
+        "declared_target_support",
         "declared target support",
         f"Observed development-data target distribution: {inventory['target_distribution']}.",
         "Judge adequacy against the declared decision and independent unit, not row count alone.",
     )
     return findings
+
+
+def target_readiness_findings(audits: dict[str, Any], case: CaseSpec) -> list[dict[str, str]]:
+    """Return target-contract findings reusable for training and evaluation partitions."""
+    inventory = audits["inventory"]
+    distribution = inventory["target_distribution"]
+    findings: list[dict[str, str]] = []
+
+    def add(code: str, check: str, evidence: str, next_evidence: str) -> None:
+        findings.append(
+            {
+                "status": "ACTION_REQUIRED",
+                "code": code,
+                "check": check,
+                "evidence": evidence,
+                "cheapest_next_evidence": next_evidence,
+            }
+        )
+
+    target_missing = int(inventory["missing"].get(case.task.target_column, 0))
+    if target_missing:
+        add(
+            "target_missing",
+            "target completeness",
+            f"The audited target has {target_missing} missing values.",
+            "Declare and document a target inclusion rule before model fitting.",
+        )
+    target_invalid = int(inventory["invalid_numeric_values"].get(case.task.target_column, 0))
+    if target_invalid:
+        add(
+            "non_finite_target",
+            "non-finite target values",
+            f"The audited target contains {target_invalid} infinite values.",
+            "Trace infinite target values to the source and declare an inclusion rule.",
+        )
+    if case.task.kind == "binary_classification":
+        class_counts = distribution["class_counts"]
+        if len(class_counts) != 2:
+            add(
+                "invalid_binary_target_support",
+                "binary target support",
+                f"The audited target has {len(class_counts)} observed classes: {class_counts}.",
+                "Provide exactly two declared target classes before fitting a binary model.",
+            )
+        if not distribution["zero_one_encoded"]:
+            add(
+                "invalid_binary_target_encoding",
+                "binary target encoding",
+                f"The audited target is not encoded as numeric 0/1: {class_counts}.",
+                "Map the two declared classes to numeric 0 and 1 before model fitting.",
+            )
+    elif not distribution["numeric"]:
+        target = case.task.target_column
+        dtype = inventory["physical_types"][target]
+        add(
+            "non_numeric_target",
+            "numeric target encoding",
+            f"The audited {case.task.kind} target {target!r} has non-numeric dtype {dtype!r}.",
+            "Encode the declared regression or ranking target as numeric values.",
+        )
+    elif int(distribution["finite_unique"]) < 2:
+        add(
+            "invalid_continuous_target_support",
+            "continuous target support",
+            "The audited regression or ranking target has fewer than two finite values.",
+            "Provide a target with at least two distinct finite observed values.",
+        )
+    return findings
+
+
+def assess_readiness(findings: list[dict[str, str]]) -> dict[str, Any]:
+    """Aggregate auditable findings into a non-scoring model-fit decision."""
+    allowed_statuses = {"ACTION_REQUIRED", "WARNING", "NOT_ASSESSABLE", "INFO"}
+    unknown = sorted({row["status"] for row in findings} - allowed_statuses)
+    if unknown:
+        raise ValueError(f"Unknown readiness finding statuses: {unknown}")
+
+    blocking = list(
+        dict.fromkeys(row["code"] for row in findings if row["status"] == "ACTION_REQUIRED")
+    )
+    limiting = list(
+        dict.fromkeys(
+            row["code"] for row in findings if row["status"] in {"WARNING", "NOT_ASSESSABLE"}
+        )
+    )
+    if blocking:
+        status = "BLOCKED"
+        interpretation = (
+            "Resolve every ACTION_REQUIRED finding before feature construction or model fitting."
+        )
+    elif limiting:
+        status = "READY_WITH_LIMITS"
+        interpretation = (
+            "Model fitting may proceed, but warnings and unassessable boundaries must remain "
+            "explicit."
+        )
+    else:
+        status = "READY"
+        interpretation = (
+            "No action-required, warning, or unassessable finding was detected in the declared "
+            "development data."
+        )
+    return {
+        "status": status,
+        "model_fitting_allowed": not blocking,
+        "blocking_checks": blocking,
+        "limiting_checks": limiting,
+        "interpretation": interpretation,
+    }
 
 
 def _write_reports(
@@ -403,6 +662,10 @@ def _write_reports(
         f"- Non-training supplied-split rows excluded: "
         f"`{structured['scope']['non_training_rows_excluded']}`.",
         "- Locked holdout labels accessed: `false`.",
+        f"- Pre-model readiness: `{structured['readiness']['status']}`.",
+        "- Model fitting allowed: "
+        f"`{str(structured['readiness']['model_fitting_allowed']).lower()}`.",
+        f"- Interpretation: {structured['readiness']['interpretation']}",
         "",
         "## Findings and cheapest next evidence",
         "",
@@ -455,6 +718,7 @@ def _write_reports(
         .render(
             case=case,
             scope=structured["scope"],
+            readiness=structured["readiness"],
             findings=findings,
             columns=profile.head(50).to_dict("records"),
         )

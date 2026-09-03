@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from numbers import Real
 from typing import Any
 
 import numpy as np
@@ -10,6 +11,7 @@ import pandas as pd
 
 from bio_ml_preflight.contracts import CaseSpec
 from bio_ml_preflight.data import dataset_fingerprint
+from bio_ml_preflight.features import model_feature_columns
 
 
 def _serial(value: Any) -> Any:
@@ -21,7 +23,6 @@ def _serial(value: Any) -> Any:
 def audit_dataset(frame: pd.DataFrame, case: CaseSpec) -> dict[str, Any]:
     target = case.task.target_column
     missing = {column: int(count) for column, count in frame.isna().sum().items() if count}
-    numeric = frame.select_dtypes(include=[np.number])
     constants = [column for column in frame if frame[column].nunique(dropna=False) <= 1]
     near_constants = [
         column
@@ -29,19 +30,25 @@ def audit_dataset(frame: pd.DataFrame, case: CaseSpec) -> dict[str, Any]:
         if column not in constants
         and frame[column].value_counts(normalize=True, dropna=False).iloc[0] >= 0.98
     ]
-    invalid_numeric = {
-        column: int((~np.isfinite(numeric[column].to_numpy(dtype=float))).sum())
-        for column in numeric
-        if (~np.isfinite(numeric[column].to_numpy(dtype=float))).any()
-    }
+    invalid_numeric = {}
+    for column in frame:
+        values = frame[column]
+        if pd.api.types.is_numeric_dtype(values):
+            count = int(np.isinf(values.to_numpy(dtype=float, na_value=np.nan)).sum())
+        else:
+            count = sum(isinstance(value, Real) and bool(np.isinf(value)) for value in values)
+        if count:
+            invalid_numeric[column] = count
     high_cardinality = [
         column
         for column in frame.select_dtypes(exclude=[np.number])
         if frame[column].nunique(dropna=True) > min(100, max(20, len(frame) // 2))
     ]
+    configured_features = model_feature_columns(frame.columns, case)
+    modeled_features = [column for column in configured_features if column in frame]
     suspicious = [
         column
-        for column in case.features.include
+        for column in modeled_features
         if ("id" in column.lower() or "token" in column.lower())
         and frame[column].nunique(dropna=True) / max(len(frame), 1) > 0.05
     ]
@@ -94,13 +101,18 @@ def audit_dataset(frame: pd.DataFrame, case: CaseSpec) -> dict[str, Any]:
             }
         entities[name] = entity_result
     pair_columns = entity_columns[:2]
-    pair: dict[str, Any] = {"status": "NOT_ASSESSABLE", "reason": "fewer than two entities"}
+    pair: dict[str, Any] = {
+        "status": "NOT_ASSESSABLE",
+        "reason": "fewer than two entities",
+        "defines_prediction_unit": _pair_defines_prediction_unit(case),
+    }
     if len(pair_columns) == 2:
         complete_pairs = frame.dropna(subset=pair_columns)
         if complete_pairs.empty:
             pair = {
                 "status": "NOT_ASSESSABLE",
                 "reason": "no rows contain both declared entity identifiers",
+                "defines_prediction_unit": _pair_defines_prediction_unit(case),
             }
         else:
             pair_counts = complete_pairs.groupby(pair_columns).size()
@@ -110,6 +122,7 @@ def audit_dataset(frame: pd.DataFrame, case: CaseSpec) -> dict[str, Any]:
             )
             pair = {
                 "columns": pair_columns,
+                "defines_prediction_unit": _pair_defines_prediction_unit(case),
                 "unique_pairs": int(pair_counts.size),
                 "repeated_pair_rows": int(pair_counts[pair_counts > 1].sum()),
                 "conflicting_label_pairs": int((label_conflicts > 1).sum()),
@@ -126,16 +139,32 @@ def audit_dataset(frame: pd.DataFrame, case: CaseSpec) -> dict[str, Any]:
     target_values = frame[target]
     target_summary: dict[str, Any]
     if case.task.kind == "binary_classification":
+        observed_classes = set(target_values.dropna().unique())
         target_summary = {
             "class_counts": {
                 str(key): int(value) for key, value in target_values.value_counts().items()
-            }
+            },
+            "zero_one_encoded": bool(
+                pd.api.types.is_numeric_dtype(target_values) and observed_classes <= {0, 1}
+            ),
         }
     else:
         target_summary = {
             str(key): _serial(value)
             for key, value in target_values.describe(percentiles=[0.05, 0.5, 0.95]).items()
         }
+        target_numeric = bool(pd.api.types.is_numeric_dtype(target_values))
+        finite_target = (
+            pd.to_numeric(target_values, errors="coerce").replace([np.inf, -np.inf], np.nan)
+            if target_numeric
+            else pd.Series(dtype=float)
+        )
+        target_summary.update(
+            {
+                "numeric": target_numeric,
+                "finite_unique": int(finite_target.nunique(dropna=True)),
+            }
+        )
     independence_warnings = []
     repeated = [
         name
@@ -188,6 +217,8 @@ def audit_dataset(frame: pd.DataFrame, case: CaseSpec) -> dict[str, Any]:
             ),
         },
         "leakage": {
+            "modeled_features": modeled_features,
+            "missing_modeled_features": sorted(set(configured_features) - set(frame.columns)),
             "suspicious_identifier_features": suspicious,
             "declared_post_outcome_features": case.features.post_outcome,
             "pipeline_guard": "All learned preprocessing is fit inside each training fold.",
@@ -199,30 +230,37 @@ def audit_dataset(frame: pd.DataFrame, case: CaseSpec) -> dict[str, Any]:
 
 
 def apply_identity_conflict_policies(
-    frame: pd.DataFrame, case: CaseSpec
+    frame: pd.DataFrame,
+    case: CaseSpec,
+    *,
+    policy_indices: pd.Index | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Apply explicit entity-level policies before feature building or splitting."""
     source = frame.copy()
+    policy_source = (
+        source if policy_indices is None else source.loc[source.index.intersection(policy_indices)]
+    )
     resolved = frame.copy()
     entity_results: dict[str, Any] = {}
     kept_conflicts = False
     changed = False
     for name, entity in case.entities.items():
         identifier = entity.id_column
-        if identifier not in source:
+        if identifier not in policy_source:
             continue
+        observed = policy_source.loc[policy_source[identifier].notna()]
         target_conflicts: set[Any] = set()
         if _entity_defines_prediction_unit(case, name, identifier):
-            target_counts = source.groupby(identifier, dropna=False)[
-                case.task.target_column
-            ].nunique(dropna=True)
+            target_counts = observed.groupby(identifier)[case.task.target_column].nunique(
+                dropna=True
+            )
             target_conflicts = set(target_counts[target_counts > 1].index)
         representation_conflicts: set[Any] = set()
         representation = entity.representation_column
-        if representation and representation in source:
-            representation_counts = source.groupby(identifier, dropna=False)[
-                representation
-            ].nunique(dropna=True)
+        if representation and representation in observed:
+            representation_counts = observed.groupby(identifier)[representation].nunique(
+                dropna=True
+            )
             representation_conflicts = set(representation_counts[representation_counts > 1].index)
         affected = target_conflicts | representation_conflicts
         result = {
@@ -242,6 +280,8 @@ def apply_identity_conflict_policies(
                 "set identity_conflict_policy to keep, exclude, or aggregate"
             )
         affected_mask = resolved[identifier].isin(affected)
+        if policy_indices is not None:
+            affected_mask &= resolved.index.isin(policy_indices)
         before = len(resolved)
         if policy == "keep":
             kept_conflicts = True
@@ -265,6 +305,7 @@ def apply_identity_conflict_policies(
     return resolved.reset_index(drop=True), {
         "status": status,
         "source_rows": len(source),
+        "policy_scope_rows": len(policy_source),
         "model_rows": len(resolved),
         "source_dataset_fingerprint": dataset_fingerprint(source, case.data.fingerprint_columns),
         "entities": entity_results,
@@ -422,7 +463,7 @@ def _aggregate_conflicting_targets(
         raise ValueError("Aggregate policy requires an explicit features.include list")
     feature_columns = [
         column
-        for column in case.features.include
+        for column in model_feature_columns(frame.columns, case)
         if column in frame and column != case.task.target_column
     ]
     for column in feature_columns:
@@ -455,10 +496,17 @@ def _aggregate_conflicting_targets(
 
 def _entity_defines_prediction_unit(case: CaseSpec, name: str, identifier: str) -> bool:
     prediction_unit = case.task.prediction_unit.lower().replace("-", "_").replace(" ", "_")
-    return len(case.entities) == 1 and prediction_unit in {
+    return prediction_unit in {
         name.lower(),
         identifier.lower().removesuffix("_id"),
     }
+
+
+def _pair_defines_prediction_unit(case: CaseSpec) -> bool:
+    prediction_unit = case.task.prediction_unit.lower().replace("-", "_").replace(" ", "_")
+    return len(case.entities) == 2 and (
+        prediction_unit == "pair" or prediction_unit.endswith("_pair")
+    )
 
 
 def _distribution(values: pd.Series) -> dict[str, float]:

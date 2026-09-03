@@ -19,6 +19,14 @@ from bio_ml_preflight.contracts import CaseSpec
 from bio_ml_preflight.contracts.case import ScenarioSpec
 from bio_ml_preflight.data import read_table
 from bio_ml_preflight.data.io import file_checksum
+from bio_ml_preflight.eda import (
+    assess_readiness,
+    declaration_findings,
+    development_row_indices,
+    development_rows,
+    readiness_findings,
+    validate_declared_columns,
+)
 from bio_ml_preflight.evaluation.capability import capability_matrix
 from bio_ml_preflight.evaluation.metrics import (
     compute_metrics,
@@ -41,6 +49,10 @@ def run_case(
     model_allowlist: set[str] | None = None,
     holdout_override_reason: str | None = None,
 ) -> dict[str, Any]:
+    pre_model_findings = declaration_findings(case)
+    pre_model_readiness = assess_readiness(pre_model_findings)
+    _require_model_readiness(pre_model_readiness)
+
     data_path = Path(case.data.path)
     holdout_access: list[dict[str, Any]] = []
     if case.holdout.enabled:
@@ -60,10 +72,103 @@ def run_case(
         holdout_access = ledger.entries()
     started = time.perf_counter()
     frame = read_table(data_path).reset_index(drop=True)
-    _validate_columns(frame, case)
-    frame, identity_consistency = apply_identity_conflict_policies(frame, case)
-    _validate_columns(frame, case)
-    audits = audit_dataset(frame, case)
+    validate_declared_columns(frame, case)
+    mutating_identity_policy = any(
+        entity.identity_conflict_policy in {"exclude", "aggregate"}
+        for entity in case.entities.values()
+    )
+    policy_indices = development_row_indices(
+        frame,
+        case,
+        require_consistent=mutating_identity_policy,
+    )
+    frame, identity_consistency = apply_identity_conflict_policies(
+        frame, case, policy_indices=policy_indices
+    )
+    development, _ = development_rows(frame, case)
+    pre_model_findings = readiness_findings(
+        audit_dataset(development, case),
+        case,
+        allow_pending_identity_policies=False,
+    )
+    pre_model_readiness = assess_readiness(pre_model_findings)
+    _require_model_readiness(pre_model_readiness)
+    seeds = case.evaluation.seeds[:2] if budget == "smoke" else case.evaluation.seeds
+    manifests = {}
+    for scenario in case.generalization_scenarios:
+        for seed in seeds:
+            manifest = create_split(frame, scenario, seed)
+            manifests[(scenario.name, seed)] = manifest
+            partition = frame.iloc[manifest.train_indices].reset_index(drop=True)
+            scope = f"training_partition:{scenario.name}:seed_{seed}"
+            for finding in readiness_findings(
+                audit_dataset(partition, case),
+                case,
+                allow_pending_identity_policies=False,
+            ):
+                if finding["status"] == "INFO":
+                    continue
+                scoped = finding.copy()
+                scoped["code"] = f"{scope}:{finding['code']}"
+                scoped["check"] = f"{finding['check']} ({scenario.name}, seed {seed})"
+                scoped["evidence"] = (
+                    f"Training partition {scenario.name}, seed {seed}: " + finding["evidence"]
+                )
+                pre_model_findings.append(scoped)
+    pre_model_readiness = assess_readiness(pre_model_findings)
+    _require_model_readiness(pre_model_readiness)
+
+    overlap_results: dict[str, Any] = {}
+    for scenario in case.generalization_scenarios:
+        for seed in seeds:
+            manifest = manifests[(scenario.name, seed)]
+            train_indices = np.asarray(manifest.train_indices)
+            test_indices = np.asarray(manifest.test_indices)
+            overlap = audit_overlap(frame, train_indices, test_indices, case)
+            if case.task.kind == "binary_classification":
+                counts, unit = _test_target_counts(frame, test_indices, case)
+                overlap["test_target_counts"] = counts
+                overlap["test_target_count_unit"] = unit
+            _validate_protected_entity_isolation(case, scenario, overlap)
+            evaluation = frame.iloc[test_indices].reset_index(drop=True)
+            scope = f"evaluation_partition:{scenario.name}:seed_{seed}"
+            for finding in readiness_findings(
+                audit_dataset(evaluation, case),
+                case,
+                allow_pending_identity_policies=False,
+            ):
+                if finding["status"] == "INFO":
+                    continue
+                scoped = finding.copy()
+                scoped["code"] = f"{scope}:{finding['code']}"
+                scoped["check"] = f"{finding['check']} ({scenario.name}, seed {seed})"
+                scoped["evidence"] = (
+                    f"Evaluation partition {scenario.name}, seed {seed}: " + finding["evidence"]
+                )
+                pre_model_findings.append(scoped)
+            overlap_results[f"{scenario.name}:{seed}"] = overlap
+    pre_model_readiness = assess_readiness(pre_model_findings)
+    _require_model_readiness(pre_model_readiness)
+
+    modeling_indices = np.asarray(
+        sorted(
+            {
+                index
+                for manifest in manifests.values()
+                for index in (*manifest.train_indices, *manifest.test_indices)
+            }
+        ),
+        dtype=np.int64,
+    )
+    modeling_frame = frame.iloc[modeling_indices]
+    audits = audit_dataset(modeling_frame, case)
+    audits["inventory"].update(
+        {
+            "scope": "union of manifest train and test partitions",
+            "source_rows_after_identity_policy": int(len(frame)),
+            "manifest_excluded_rows": int(len(frame) - len(modeling_indices)),
+        }
+    )
     audits["identity_consistency"] = identity_consistency
     source_record_path = data_path.parent / "source.json"
     dataset_source = (
@@ -73,9 +178,11 @@ def run_case(
     )
     if case.graph_readiness is not None:
         audits["graph_readiness_contract"] = audit_graph_readiness_contract(
-            frame, case, identity_consistency
+            modeling_frame, case, identity_consistency
         )
-    feature_frames = build_feature_frames(frame, case)
+    feature_frames = build_feature_frames(modeling_frame, case)
+    for features in feature_frames.values():
+        features.index = modeling_indices
     target = frame[case.task.target_column].to_numpy()
     output.mkdir(parents=True, exist_ok=True)
     prediction_dir = output / "predictions"
@@ -92,24 +199,15 @@ def run_case(
     records: list[dict[str, Any]] = []
     ranking_predictions: list[pd.DataFrame] = []
     learning_records: list[dict[str, Any]] = []
-    overlap_results: dict[str, Any] = {}
     split_hashes: dict[str, str] = {}
-    seeds = case.evaluation.seeds[:2] if budget == "smoke" else case.evaluation.seeds
     for scenario in case.generalization_scenarios:
         for seed in seeds:
-            manifest = create_split(frame, scenario, seed)
+            manifest = manifests[(scenario.name, seed)]
             manifest_path = manifest_dir / f"{scenario.name}__seed-{seed}.json"
             train_indices = np.asarray(manifest.train_indices)
             test_indices = np.asarray(manifest.test_indices)
-            overlap = audit_overlap(frame, train_indices, test_indices, case)
-            if case.task.kind == "binary_classification":
-                counts, unit = _test_target_counts(frame, test_indices, case)
-                overlap["test_target_counts"] = counts
-                overlap["test_target_count_unit"] = unit
-            _validate_protected_entity_isolation(case, scenario, overlap)
             manifest.save(manifest_path)
             split_hashes[f"{scenario.name}:{seed}"] = manifest.fingerprint()
-            overlap_results[f"{scenario.name}:{seed}"] = overlap
             for representation, features in feature_frames.items():
                 suite = build_probe_suite(features, case.task.kind, seed, budget)
                 if effective_allowlist is not None:
@@ -123,14 +221,17 @@ def run_case(
                 for model_name, model in suite.items():
                     run_id = f"{scenario.name}__{representation}__{model_name}__seed-{seed}"
                     fit_started = time.perf_counter()
-                    model.fit(features.iloc[train_indices], target[train_indices])
+                    prediction_indices = np.sort(np.concatenate([train_indices, test_indices]))
+                    test_mask = np.isin(prediction_indices, test_indices)
+                    model.fit(features.loc[train_indices], target[train_indices])
                     with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
                         if case.task.kind == "binary_classification":
-                            y_test = model.predict_proba(features.iloc[test_indices])[:, 1]
-                            y_all = model.predict_proba(features)[:, 1]
+                            y_prediction = model.predict_proba(features.loc[prediction_indices])[
+                                :, 1
+                            ]
                         else:
-                            y_test = model.predict(features.iloc[test_indices])
-                            y_all = model.predict(features)
+                            y_prediction = model.predict(features.loc[prediction_indices])
+                    y_test = y_prediction[test_mask]
                     runtime = time.perf_counter() - fit_started
                     metrics = compute_metrics(
                         target[test_indices],
@@ -172,7 +273,8 @@ def run_case(
                     prediction = _prediction_frame(
                         frame,
                         target,
-                        np.asarray(y_all),
+                        np.asarray(y_prediction),
+                        prediction_indices,
                         test_indices,
                         run_id,
                         scenario.name,
@@ -192,16 +294,14 @@ def run_case(
                                 model_name
                             ]
                             perm_started = time.perf_counter()
-                            perm_model.fit(features.iloc[train_indices], permuted_target)
+                            perm_model.fit(features.loc[train_indices], permuted_target)
                             with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
                                 if case.task.kind == "binary_classification":
                                     perm_prediction = perm_model.predict_proba(
-                                        features.iloc[test_indices]
+                                        features.loc[test_indices]
                                     )[:, 1]
                                 else:
-                                    perm_prediction = perm_model.predict(
-                                        features.iloc[test_indices]
-                                    )
+                                    perm_prediction = perm_model.predict(features.loc[test_indices])
                             records.append(
                                 _record(
                                     scenario.name,
@@ -335,13 +435,6 @@ def run_case(
         audits=audits,
         overlap_results=overlap_results,
     )
-    unconfirmed = sorted(key for key, confirmed in case.role_confirmation.items() if not confirmed)
-    if unconfirmed:
-        for verdict in capability:
-            verdict["status"] = "NOT_ASSESSABLE"
-            verdict["evidence_against"].append(f"Unconfirmed case roles: {unconfirmed}.")
-            verdict["unmet_assumptions"].append("A researcher must confirm provisional roles.")
-            verdict["cheapest_next_evidence"] = "Review and confirm the provisional case roles."
     representation_sensitivity = _representation_sensitivity(
         capability, experiments, case.evaluation.primary_metric
     )
@@ -355,6 +448,8 @@ def run_case(
         "schema_version": 1,
         "case": case.model_dump(mode="json"),
         "dataset_source": dataset_source,
+        "pre_model_readiness": pre_model_readiness,
+        "pre_model_findings": pre_model_findings,
         "audits": audits,
         "split_overlap": overlap_results,
         "experiment_summary": _experiment_summary(experiments, case.evaluation.primary_metric),
@@ -377,6 +472,16 @@ def run_case(
         json.dumps(provenance, indent=2, sort_keys=True), encoding="utf-8"
     )
     return cast(dict[str, Any], _json_safe(structured))
+
+
+def _require_model_readiness(readiness: dict[str, Any]) -> None:
+    if readiness["model_fitting_allowed"]:
+        return
+    blockers = ", ".join(readiness["blocking_checks"])
+    raise ValueError(
+        f"Pre-model readiness gate BLOCKED by: {blockers}. "
+        "Resolve ACTION_REQUIRED findings before model fitting."
+    )
 
 
 def _ranking_results(
@@ -563,18 +668,18 @@ def _prediction_frame(
     frame: pd.DataFrame,
     target: npt.NDArray[Any],
     prediction: npt.NDArray[Any],
+    row_indices: npt.NDArray[np.int64],
     test_indices: npt.NDArray[np.int64],
     run_id: str,
     scenario: str,
     model: str,
     representation: str,
 ) -> pd.DataFrame:
-    result = frame.copy()
-    result["_row_id"] = np.arange(len(frame))
-    result["y_true"] = target
+    result = cast(pd.DataFrame, frame.iloc[row_indices].copy())
+    result["_row_id"] = row_indices
+    result["y_true"] = target[row_indices]
     result["y_pred"] = prediction
-    result["is_test"] = False
-    result.loc[test_indices, "is_test"] = True
+    result["is_test"] = np.isin(row_indices, test_indices)
     result["run_id"] = run_id
     result["scenario"] = scenario
     result["model"] = model
@@ -639,13 +744,22 @@ def _learning_curve(
         group_count = max(3, round(fraction * len(order)))
         chosen = set(order[:group_count])
         subset = train_indices[frame.iloc[train_indices][group_column].isin(chosen).to_numpy()]
+        subset_readiness = assess_readiness(
+            readiness_findings(
+                audit_dataset(frame.iloc[subset], case),
+                case,
+                allow_pending_identity_policies=False,
+            )
+        )
+        if not subset_readiness["model_fitting_allowed"]:
+            continue
         model = build_probe_suite(features, case.task.kind, seed, budget)[model_name]
-        model.fit(features.iloc[subset], target[subset])
+        model.fit(features.loc[subset], target[subset])
         with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
             if case.task.kind == "binary_classification":
-                prediction = model.predict_proba(features.iloc[test_indices])[:, 1]
+                prediction = model.predict_proba(features.loc[test_indices])[:, 1]
             else:
-                prediction = model.predict(features.iloc[test_indices])
+                prediction = model.predict(features.loc[test_indices])
         metrics = compute_metrics(
             target[test_indices],
             np.asarray(prediction),
@@ -680,28 +794,6 @@ def _ranking_candidate_column(
     return None
 
 
-def _validate_columns(frame: pd.DataFrame, case: CaseSpec) -> None:
-    required = {case.task.target_column}
-    required.update(entity.id_column for entity in case.entities.values())
-    if case.graph_readiness is not None:
-        required.update(
-            {
-                case.graph_readiness.structure_column,
-                case.graph_readiness.independent_unit_column,
-            }
-        )
-    if case.thresholds.minimum_test_class_count is not None:
-        assert case.evaluation.bootstrap_unit is not None
-        required.add(case.evaluation.bootstrap_unit)
-    missing = sorted(required - set(frame.columns))
-    if missing:
-        raise ValueError(f"Case references missing required columns: {missing}")
-    if frame[case.task.target_column].isna().any():
-        raise ValueError(
-            "The target contains missing values; define an explicit target inclusion rule"
-        )
-
-
 def _test_target_counts(
     frame: pd.DataFrame,
     test_indices: npt.NDArray[np.int64],
@@ -734,8 +826,22 @@ def _validate_protected_entity_isolation(
     if scenario.strategy not in {"group", "scaffold", "supplied"}:
         return
     grouping_column = scenario.group_column
+    prediction_unit = case.task.prediction_unit.lower().replace("-", "_").replace(" ", "_")
     for name, entity in case.entities.items():
-        if grouping_column not in {entity.id_column, entity.representation_column}:
+        entity_columns = {entity.id_column, entity.representation_column}
+        explicitly_grouped = grouping_column is not None and grouping_column in entity_columns
+        locked_prediction_entity = (
+            scenario.strategy == "supplied"
+            and case.holdout.enabled
+            and (
+                prediction_unit in {name.lower(), entity.id_column.lower().removesuffix("_id")}
+                or (
+                    case.evaluation.bootstrap_unit is not None
+                    and case.evaluation.bootstrap_unit in entity_columns
+                )
+            )
+        )
+        if not explicitly_grouped and not locked_prediction_entity:
             continue
         count = overlap["entity_overlap"].get(name, {}).get("count", 0)
         if count:
@@ -743,6 +849,17 @@ def _validate_protected_entity_isolation(
                 f"Scenario {scenario.name!r} cannot provide held-out {name} evidence: "
                 f"{count} identifiers cross train and test; resolve identity conflicts first"
             )
+    if (
+        scenario.strategy == "supplied"
+        and case.holdout.enabled
+        and len(case.entities) == 2
+        and (prediction_unit == "pair" or prediction_unit.endswith("_pair"))
+        and overlap.get("pair_overlap")
+    ):
+        raise ValueError(
+            f"Scenario {scenario.name!r} cannot provide held-out pair evidence: "
+            f"{overlap['pair_overlap']} pairs cross train and test"
+        )
 
 
 def _experiment_summary(experiments: pd.DataFrame, primary: str) -> list[dict[str, Any]]:

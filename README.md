@@ -52,6 +52,23 @@ measurement limits, and missing high-value metadata without deleting outliers or
 universal quality score. Holdout-enabled cases are refused before their tables are read;
 non-training rows in an ordinary supplied split are excluded from the profile.
 
+The findings also produce a non-scoring pre-model decision: `READY` when no limitation is
+detected, `READY_WITH_LIMITS` when modeling may proceed with explicit warnings or
+`NOT_ASSESSABLE` boundaries, and `BLOCKED` when an `ACTION_REQUIRED` issue must be resolved.
+`run` enforces the same decision before feature construction and model fitting. Examples of
+blocking issues are unconfirmed roles, missing targets or entity IDs, unresolved identity
+conflicts, infinite modeled values, and target or post-outcome leakage. Ordinary feature
+missingness remains a warning because imputation can stay inside training folds. For a locked
+holdout run, declaration-only blockers are checked before access; after the access ledger is
+updated, the data-dependent readiness audit uses only supplied training rows. Identity policies
+likewise cannot use outcomes from rows reserved by a purely supplied evaluation. Binary targets
+must use numeric `0` and `1`, matching the current metric and probability contract. Regression
+and ranking targets must be numeric with at least two finite values. Each reserved evaluation
+partition receives the same executable data-contract check after any logged holdout access and
+before feature construction; its outcomes are never used to select or remove rows. Rows excluded
+by every split manifest do not enter run audits, feature construction, predictions, or capability
+verdicts.
+
 ## Why the case matters
 
 Suitability is conditional on the target, prediction unit, deployment population, generalization axis, decision rule, and validation design. Ten thousand measurements from ten patients are not ten thousand independent samples. Random row splits can place the same patient, molecule, target, batch, or near-duplicate in both sets; they are useful diagnostics but cannot establish unseen-entity performance.
