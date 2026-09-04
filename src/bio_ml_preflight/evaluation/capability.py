@@ -7,7 +7,10 @@ import pandas as pd
 
 from bio_ml_preflight.contracts import CaseSpec
 from bio_ml_preflight.contracts.case import ScenarioSpec
-from bio_ml_preflight.evaluation.metrics import empirical_permutation_summary
+from bio_ml_preflight.evaluation.metrics import (
+    empirical_permutation_summary,
+    metric_higher_is_better,
+)
 
 Status = str
 
@@ -21,7 +24,7 @@ def capability_matrix(
     overlap_results: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     primary = case.evaluation.primary_metric
-    higher_is_better = primary not in {"mae", "rmse", "log_loss"}
+    higher_is_better = metric_higher_is_better(primary)
     direction = 1 if higher_is_better else -1
     usable = experiments[experiments["model"].ne("dummy")]
     random_values = usable[
@@ -135,6 +138,10 @@ def capability_matrix(
             and direction * random_median >= direction * case.thresholds.supported_metric
             and low_metric
         )
+        next_step = (
+            "Inspect development errors and split-to-split variation using existing predictions; "
+            "this evidence does not identify whether more independent units would help."
+        )
         if leakage_contradiction:
             status = "CONTRADICTED"
             unmet.append(
@@ -148,17 +155,12 @@ def capability_matrix(
             if case.holdout.enabled:
                 next_step = (
                     "Audit alignment between development data and the external target and "
-                    "measurement boundary, including intended deployment, then reserve a new "
-                    "untouched confirmation set; do not adapt to or rerun this holdout."
+                    "measurement boundary, including intended deployment."
                 )
             elif weak_permutation:
                 next_step = (
                     "Localize the weak target or split boundary with existing baselines before "
                     "adding data or model capacity."
-                )
-            else:
-                next_step = (
-                    "Add independent units along this scenario, then repeat the fixed validation."
                 )
         elif (
             direction * metric >= direction * case.thresholds.supported_metric
@@ -169,7 +171,6 @@ def capability_matrix(
         else:
             status = "SUPPORTED_WITH_LIMITS"
             unmet.append("Evidence is moderate or sensitive to the sampled split.")
-            next_step = "Increase independent entity coverage at the weakest split boundary."
         verdict = _verdict(
             scenario.name,
             status,
@@ -225,6 +226,11 @@ def capability_matrix(
         }
         _apply_audit_limits(verdict, audit_summary, combined_overlap)
         rows.append(verdict)
+    if case.holdout.enabled:
+        for verdict in rows:
+            verdict["cheapest_next_evidence"] += (
+                " Use a new untouched confirmation set; do not adapt to or rerun this holdout."
+            )
     if audits:
         rows.append(_measurement_verdict(audits.get("measurement", {})))
         rows.extend(_missing_metadata_verdicts(audits.get("missing_high_value_metadata", [])))
@@ -462,7 +468,7 @@ def _apply_test_class_limit(
     )
     verdict["cheapest_next_evidence"] = (
         f"Add at least {required - observed} independent minority-class holdout examples "
-        "under the locked protocol."
+        "under the locked protocol. " + verdict["cheapest_next_evidence"]
     )
 
 

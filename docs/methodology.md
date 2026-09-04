@@ -22,6 +22,8 @@ Group-respecting permutations move label blocks between equal-sized independent 
 
 Capability thresholds live in the case. Verdict rules compare the best controlled baseline, permutation delta, split dispersion, ranking overlap, and random-versus-deployment scenario behavior. Each output carries supporting and opposing evidence, uncertainty, unmet assumptions, numbers, and the cheapest next evidence.
 
+Low or unstable baseline performance alone does not identify its cause or establish that more independent samples would help. Next-evidence advice starts with existing development predictions and the declared task and split boundary; a predeclared class-support deficit can still justify a concrete request for additional independent examples. Class-support advice preserves conflict, overlap, and holdout safeguards, and consumed holdouts must not be adapted to or rerun.
+
 MAE, RMSE and log loss are minimized; other supported primary metrics are maximized.
 Thresholds remain in raw metric units: for error metrics, `supported_metric` is a stricter
 maximum than `limited_metric` (for example, RMSE 1.0 and 1.5). For higher-is-better metrics

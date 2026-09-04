@@ -18,6 +18,10 @@ from sklearn.metrics import (
 )
 
 
+def metric_higher_is_better(metric: str) -> bool:
+    return metric not in {"mae", "rmse", "log_loss"}
+
+
 def _correlation(
     function: Callable[..., Any],
     y_true: npt.NDArray[np.float64],

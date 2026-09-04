@@ -8,9 +8,13 @@ from bio_ml_preflight.runner import run_case
 
 
 @pytest.mark.parametrize("kind", ["stable", "leakage", "no_signal", "ranking_instability"])
-def test_synthetic_qualitative_findings(tmp_path: Path, kind: SyntheticKind) -> None:
+@pytest.mark.parametrize("data_seed", [2026, 73129])
+def test_synthetic_qualitative_findings(
+    tmp_path: Path, kind: SyntheticKind, data_seed: int
+) -> None:
     path = tmp_path / f"{kind}.parquet"
-    generate_synthetic(kind, path)
+    # 73129 was reserved before the decision-reliability repairs; thresholds stay fixed.
+    generate_synthetic(kind, path, seed=data_seed)
     case = synthetic_case(kind, path)
     result = run_case(case, tmp_path / f"report-{kind}", budget="smoke")
     statuses = {row["claim_or_scenario"]: row["status"] for row in result["capability_matrix"]}

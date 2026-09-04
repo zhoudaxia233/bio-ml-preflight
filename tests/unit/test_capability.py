@@ -120,6 +120,49 @@ def _supported_experiments(scenario: str, strategy: str) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+@pytest.mark.parametrize(
+    "scores,expected_status",
+    [
+        ([0.1], "INSUFFICIENT_EVIDENCE"),
+        ([0.5], "SUPPORTED_WITH_LIMITS"),
+        ([0.55, 0.95], "SUPPORTED_WITH_LIMITS"),
+    ],
+)
+@pytest.mark.parametrize("holdout", [False, True])
+def test_limited_baseline_does_not_diagnose_sample_shortage(
+    tmp_path, scores, expected_status, holdout
+) -> None:
+    case = synthetic_case("no_signal", tmp_path / "unused.parquet")
+    case.generalization_scenarios = [
+        ScenarioSpec(name="unseen_entity", strategy="group", group_column="entity_id")
+    ]
+    case.thresholds.supported_metric = 0.7
+    case.thresholds.limited_metric = 0.4
+    case.thresholds.maximum_dispersion = 0.1
+    case.holdout.enabled = holdout
+    experiments = _supported_experiments("unseen_entity", "group")
+    real = experiments.iloc[[0]].copy()
+    experiments = experiments[experiments["permuted"]]
+    for score in scores:
+        current = real.copy()
+        current["spearman"] = score
+        experiments = pd.concat([experiments, current], ignore_index=True)
+
+    row = capability_matrix(experiments, case, {})[0]
+
+    assert row["status"] == expected_status
+    assert row["numbers"]["median"] == pytest.approx(sum(scores) / len(scores))
+    advice = row["cheapest_next_evidence"]
+    assert "Add independent units" not in advice
+    assert "Increase independent entity coverage" not in advice
+    if holdout:
+        assert "new untouched confirmation set" in advice
+        assert "do not adapt to or rerun this holdout" in advice
+    else:
+        assert "existing predictions" in advice
+        assert "does not identify whether more independent units would help" in advice
+
+
 def test_random_success_and_cold_failure_is_contradicted(tmp_path) -> None:
     case = synthetic_case("leakage", tmp_path / "x.parquet")
     experiments = pd.DataFrame(
@@ -254,8 +297,12 @@ def test_protected_entity_overlap_caps_support(tmp_path) -> None:
         ("conflicting_target_entities", "entity_overlap"),
     ],
 )
-def test_audit_advice_separates_conflicts_from_overlap(tmp_path, conflict, overlap_kind) -> None:
+@pytest.mark.parametrize("holdout", [False, True])
+def test_audit_advice_separates_conflicts_from_overlap(
+    tmp_path, conflict, overlap_kind, holdout
+) -> None:
     case = synthetic_case("stable", tmp_path / "unused.parquet")
+    case.holdout.enabled = holdout
     case.generalization_scenarios = [
         ScenarioSpec(name="cold_target", strategy="group", group_column="target_id")
     ]
@@ -284,6 +331,8 @@ def test_audit_advice_separates_conflicts_from_overlap(tmp_path, conflict, overl
         assert ("overlap-free split manifests" in advice) is bool(overlap_kind)
         assert ("conflicting entity records" in advice) is bool(conflict)
         assert before["cheapest_next_evidence"] in advice
+        if holdout:
+            assert "do not adapt to or rerun this holdout" in advice
         if conflict:
             assert row["numbers"][conflict] == 1
             assert "declared identity policy" in advice
@@ -291,13 +340,15 @@ def test_audit_advice_separates_conflicts_from_overlap(tmp_path, conflict, overl
             assert not any("split isolation" in value for value in row["unmet_assumptions"])
 
 
-def test_small_external_minority_class_blocks_confirmation(tmp_path) -> None:
+@pytest.mark.parametrize("audit_limits", [False, True])
+def test_small_external_minority_class_blocks_confirmation(tmp_path, audit_limits) -> None:
     case = synthetic_case("no_signal", tmp_path / "x.parquet")
     case.task.kind = "binary_classification"
     case.evaluation.primary_metric = "balanced_accuracy"
     case.thresholds.supported_metric = 0.65
     case.thresholds.limited_metric = 0.55
     case.thresholds.minimum_test_class_count = 20
+    case.holdout.enabled = True
     case.generalization_scenarios = [
         ScenarioSpec(
             name="external",
@@ -333,19 +384,28 @@ def test_small_external_minority_class_blocks_confirmation(tmp_path) -> None:
         "external:11": {
             "test_target_counts": {"0": 4, "1": 171},
             "test_target_count_unit": "compound_id",
-            "exact_duplicate_overlap": 0,
+            "exact_duplicate_overlap": int(audit_limits),
             "pair_overlap": 0,
             "entity_overlap": {"group": {"count": 0, "test_fraction": 0.0}},
         }
     }
 
-    row = capability_matrix(experiments, case, {}, audits={}, overlap_results=overlap)[0]
+    audits = {
+        "independence": {
+            "entities": {"compound": {"conflicting_target_entities": int(audit_limits)}}
+        }
+    }
+    row = capability_matrix(experiments, case, {}, audits=audits, overlap_results=overlap)[0]
 
     assert row["status"] == "INSUFFICIENT_EVIDENCE"
     assert row["numbers"]["test_class_counts"] == {"0": 4, "1": 171}
     assert row["numbers"]["test_class_count_unit"] == "compound_id"
     assert row["numbers"]["minimum_test_class_count_required"] == 20
     assert "at least 16" in row["cheapest_next_evidence"]
+    assert "under the locked protocol" in row["cheapest_next_evidence"]
+    assert "do not adapt to or rerun this holdout" in row["cheapest_next_evidence"]
+    assert ("overlap-free split manifests" in row["cheapest_next_evidence"]) is audit_limits
+    assert ("conflicting entity records" in row["cheapest_next_evidence"]) is audit_limits
 
 
 @pytest.mark.parametrize("target_conflicts", [0, 1])

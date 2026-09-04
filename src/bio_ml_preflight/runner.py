@@ -877,6 +877,7 @@ def _experiment_summary(experiments: pd.DataFrame, primary: str) -> list[dict[st
                 "median": float(values.median()) if len(values) else None,
                 "standard_deviation": float(values.std()) if len(values) > 1 else 0.0,
                 "runs": int(len(group)),
+                "finite_runs": int(np.isfinite(group[primary].to_numpy(dtype=float)).sum()),
             }
         )
     return result
