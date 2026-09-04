@@ -1009,11 +1009,6 @@ h2 em {
   .capability-card.tall {
     grid-row: auto;
   }
-
-  .capability-card.light,
-  .capability-card.lime {
-    grid-column: span 2;
-  }
 }
 
 @media (max-width: 640px) {

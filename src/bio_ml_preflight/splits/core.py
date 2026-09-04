@@ -4,7 +4,6 @@ import hashlib
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -113,12 +112,3 @@ def create_split(
         test_indices=sorted(int(value) for value in test),
         excluded_indices=sorted(int(value) for value in excluded),
     )
-
-
-def load_manifest(path: Path) -> SplitManifest:
-    payload: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
-    expected = payload.pop("sha256")
-    manifest = SplitManifest(**payload)
-    if manifest.fingerprint() != expected:
-        raise ValueError(f"Split manifest checksum mismatch: {path}")
-    return manifest

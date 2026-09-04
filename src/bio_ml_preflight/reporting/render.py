@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 from jinja2 import BaseLoader, Environment
 
@@ -239,8 +240,16 @@ Random splits are diagnostic and are not evidence of unseen-entity or future-tim
 """
 
 
-def _pretty(value: Any) -> str:
-    return "```json\n" + json.dumps(value, indent=2, sort_keys=True) + "\n```"
+def json_safe(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [json_safe(item) for item in value]
+    if isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, float) and not np.isfinite(value):
+        return None
+    return value
 
 
 def _table(rows: list[dict[str, Any]], columns: list[str]) -> str:
@@ -302,22 +311,30 @@ def write_report(
         for row in capability
         if row["claim_or_scenario"] in {scenario.name for scenario in case.generalization_scenarios}
     ]
+    json_sections = {
+        key: json.dumps(value, indent=2, sort_keys=True)
+        for key, value in {
+            "pre_model_readiness": structured["pre_model_readiness"],
+            "pre_model_findings": structured["pre_model_findings"],
+            "inventory": structured["audits"]["inventory"],
+            "dataset_source": structured.get("dataset_source", {}),
+            "identity_consistency": structured["audits"]["identity_consistency"],
+            "independence": structured["audits"]["independence"],
+            "leakage": structured["audits"]["leakage"],
+            "measurement": structured["audits"]["measurement"],
+            "coverage": structured["audits"]["coverage"],
+            "learning_curve": structured["learning_curve"],
+            "stability": structured["stability_decomposition"],
+            "ranking": structured["ranking_stability"],
+        }.items()
+    }
     context = {
         "case": case,
         "scenarios": ", ".join(scenario.name for scenario in case.generalization_scenarios),
-        "pre_model_readiness": _pretty(structured["pre_model_readiness"]),
-        "pre_model_findings": _pretty(structured["pre_model_findings"]),
-        "inventory": _pretty(structured["audits"]["inventory"]),
-        "dataset_source": _pretty(structured.get("dataset_source", {})),
-        "identity_consistency": _pretty(structured["audits"]["identity_consistency"]),
-        "independence": _pretty(structured["audits"]["independence"]),
-        "leakage": _pretty(structured["audits"]["leakage"]),
-        "measurement": _pretty(structured["audits"]["measurement"]),
-        "coverage": _pretty(structured["audits"]["coverage"]),
+        **{key: f"```json\n{value}\n```" for key, value in json_sections.items()},
         "scenario_table": _table(
             scenario_rows, ["scenario", "representation", "status", "numbers"]
         ),
-        "learning_curve": _pretty(structured["learning_curve"]),
         "representation_table": _table(
             representation_sensitivity,
             [
@@ -330,8 +347,6 @@ def write_report(
                 "conservative_status",
             ],
         ),
-        "stability": _pretty(structured["stability_decomposition"]),
-        "ranking": _pretty(structured["ranking_stability"]),
         "capability_table": _table(
             capability,
             [
@@ -352,34 +367,6 @@ def write_report(
         .render(context)
     )
     (output / "report.md").write_text(markdown, encoding="utf-8")
-    json_context = {
-        "pre_model_readiness_json": json.dumps(
-            structured["pre_model_readiness"], indent=2, sort_keys=True
-        ),
-        "pre_model_findings_json": json.dumps(
-            structured["pre_model_findings"], indent=2, sort_keys=True
-        ),
-        "inventory_json": json.dumps(structured["audits"]["inventory"], indent=2, sort_keys=True),
-        "dataset_source_json": json.dumps(
-            structured.get("dataset_source", {}), indent=2, sort_keys=True
-        ),
-        "identity_consistency_json": json.dumps(
-            structured["audits"]["identity_consistency"], indent=2, sort_keys=True
-        ),
-        "independence_json": json.dumps(
-            structured["audits"]["independence"], indent=2, sort_keys=True
-        ),
-        "leakage_json": json.dumps(structured["audits"]["leakage"], indent=2, sort_keys=True),
-        "measurement_json": json.dumps(
-            structured["audits"]["measurement"], indent=2, sort_keys=True
-        ),
-        "coverage_json": json.dumps(structured["audits"]["coverage"], indent=2, sort_keys=True),
-        "learning_curve_json": json.dumps(structured["learning_curve"], indent=2, sort_keys=True),
-        "stability_json": json.dumps(
-            structured["stability_decomposition"], indent=2, sort_keys=True
-        ),
-        "ranking_json": json.dumps(structured["ranking_stability"], indent=2, sort_keys=True),
-    }
     html = (
         Environment(loader=BaseLoader(), autoescape=True)
         .from_string(HTML_TEMPLATE)
@@ -389,7 +376,7 @@ def write_report(
             scenario_rows=scenario_rows,
             representation_rows=representation_sensitivity,
             capability=capability,
-            **json_context,
+            **{f"{key}_json": value for key, value in json_sections.items()},
         )
     )
     (output / "report.html").write_text(html, encoding="utf-8")

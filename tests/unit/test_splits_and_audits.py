@@ -30,9 +30,7 @@ def test_group_split_is_deterministic_and_has_no_group_overlap(tmp_path) -> None
 
 def test_duplicate_overlap_is_detected(tmp_path) -> None:
     frame = pd.DataFrame({"sample_id": ["a", "a", "b"], "x": [1, 1, 2], "y": [3, 3, 4]})
-    path = tmp_path / "table.parquet"
-    frame.to_parquet(path)
-    case = synthetic_case("no_signal", path)
+    case = synthetic_case("no_signal", tmp_path / "unused.parquet")
     case.task.target_column = "y"
     case.entities = {}
     case.data.fingerprint_columns = ["sample_id", "x", "y"]

@@ -20,10 +20,7 @@ def infer_roles(frame: pd.DataFrame) -> dict[str, list[dict[str, Any]]]:
         str(column)
         for column in frame.columns
         if "id" in str(column).lower()
-        or (
-            column in frame.select_dtypes(exclude="number").columns
-            and frame[column].nunique(dropna=True) == len(frame)
-        )
+        or (column in categorical_columns and frame[column].nunique(dropna=True) == len(frame))
     ]
     return {
         "candidate_numeric_targets": [

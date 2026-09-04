@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 import math
-import shutil
 from datetime import UTC, datetime
 from pathlib import Path
+from statistics import median
 from typing import Any, Literal
 
 import yaml
@@ -133,7 +133,7 @@ def evaluate_candidate(candidate_path: Path) -> dict[str, Any]:
         "timestamp": datetime.now(UTC).isoformat(),
         "primary_metric": primary,
         "primary_metric_higher_is_better": higher_is_better,
-        "median_primary_development_metric": _median(medians),
+        "median_primary_development_metric": median(medians) if medians else None,
         "worst_scenario_metric": worst_metric(medians) if medians else None,
         "seed_or_split_dispersion": max(dispersions) if dispersions else None,
         "top_k_stability": first_k.get("average_pairwise_jaccard"),
@@ -193,17 +193,3 @@ def _select(
     ):
         return "DISCARD", ["ranking stability materially regressed"]
     return "KEEP", ["lexicographic scientific guardrails and improvement rules passed"]
-
-
-def _median(values: list[float]) -> float | None:
-    if not values:
-        return None
-    ordered = sorted(values)
-    middle = len(ordered) // 2
-    if len(ordered) % 2:
-        return ordered[middle]
-    return (ordered[middle - 1] + ordered[middle]) / 2
-
-
-def copy_candidate(source: Path, destination: Path) -> None:
-    shutil.copy2(source, destination)

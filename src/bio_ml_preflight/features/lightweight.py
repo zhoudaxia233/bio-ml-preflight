@@ -39,10 +39,9 @@ def amino_acid_composition(values: Iterable[object], *, prefix: str) -> pd.DataF
 
 
 def build_feature_frames(frame: pd.DataFrame, case: CaseSpec) -> dict[str, pd.DataFrame]:
-    representations: list[str] = []
-    representations.extend(case.features.molecular_representations)
-    if not representations:
-        representations.append("declared_features")
+    representations: list[str] = list(case.features.molecular_representations) or [
+        "declared_features"
+    ]
     return {
         representation: build_feature_frame(
             frame,

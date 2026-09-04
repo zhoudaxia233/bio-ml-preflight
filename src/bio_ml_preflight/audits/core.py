@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from numbers import Real
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -12,12 +12,6 @@ import pandas as pd
 from bio_ml_preflight.contracts import CaseSpec
 from bio_ml_preflight.data import dataset_fingerprint
 from bio_ml_preflight.features import model_feature_columns
-
-
-def _serial(value: Any) -> Any:
-    if isinstance(value, np.generic):
-        return value.item()
-    return value
 
 
 def audit_dataset(frame: pd.DataFrame, case: CaseSpec) -> dict[str, Any]:
@@ -149,10 +143,9 @@ def audit_dataset(frame: pd.DataFrame, case: CaseSpec) -> dict[str, Any]:
             ),
         }
     else:
-        target_summary = {
-            str(key): _serial(value)
-            for key, value in target_values.describe(percentiles=[0.05, 0.5, 0.95]).items()
-        }
+        target_summary = cast(
+            dict[str, Any], target_values.describe(percentiles=[0.05, 0.5, 0.95]).to_dict()
+        )
         target_numeric = bool(pd.api.types.is_numeric_dtype(target_values))
         finite_target = (
             pd.to_numeric(target_values, errors="coerce").replace([np.inf, -np.inf], np.nan)
@@ -643,8 +636,8 @@ def audit_overlap(
     pair_overlap = None
     if len(entity_columns) >= 2:
         pair_columns = entity_columns[:2]
-        train_pairs = set(map(tuple, train[pair_columns].itertuples(index=False, name=None)))
-        test_pairs = set(map(tuple, test[pair_columns].itertuples(index=False, name=None)))
+        train_pairs = set(train[pair_columns].itertuples(index=False, name=None))
+        test_pairs = set(test[pair_columns].itertuples(index=False, name=None))
         pair_overlap = len(train_pairs & test_pairs)
     exact_hash_columns = case.data.fingerprint_columns or list(frame.columns)
     train_hash = set(pd.util.hash_pandas_object(train[exact_hash_columns], index=False))

@@ -36,7 +36,7 @@ def test_parkinsons_public_smoke(tmp_path: Path) -> None:
     )
     assert {
         "Permutation separation is insufficient.",
-        "The controlled baseline is below the configured useful metric.",
+        "The controlled baseline does not meet the configured usefulness threshold.",
         "Performance is unstable across the evaluated splits.",
     } <= set(capability["unseen_participant"]["unmet_assumptions"])
     assert all(row["numbers"]["permutation_draws"] == 9 for row in capability.values())

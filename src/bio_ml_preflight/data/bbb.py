@@ -307,7 +307,6 @@ def load_petbd_external_confirmation(
 
     protected_ids = set(protected["compound_id"].astype(str))
     overlap = holdout["compound_id"].isin(protected_ids)
-    holdout_before_overlap = holdout.copy()
     holdout = holdout.loc[~overlap].copy()
     holdout.insert(0, "sample_id", "petbd-" + holdout["compound_id"].astype(str))
     holdout["validation_split"] = "holdout"
@@ -339,7 +338,7 @@ def load_petbd_external_confirmation(
         "rows_excluded_missing_smiles_with_positive_ratio": int(
             (positive_ratio & external["SMILES"].isna()).sum()
         ),
-        "external_compounds_before_identity_policy": len(holdout_before_overlap),
+        "external_compounds_before_identity_policy": len(overlap),
         "external_identity_overlap_compounds_excluded": int(overlap.sum()),
         "external_rows": len(holdout),
         "external_compounds": int(holdout["compound_id"].nunique()),

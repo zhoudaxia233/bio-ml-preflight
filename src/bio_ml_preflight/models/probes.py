@@ -11,6 +11,7 @@ from sklearn.ensemble import (
     ExtraTreesClassifier,
     ExtraTreesRegressor,
     HistGradientBoostingClassifier,
+    HistGradientBoostingRegressor,
 )
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import ElasticNet, LogisticRegression
@@ -78,9 +79,7 @@ def build_probe_suite(
                 n_jobs=1,
                 random_state=seed,
             ),
-            "hist_gradient_boosting": __import__(
-                "sklearn.ensemble", fromlist=["HistGradientBoostingRegressor"]
-            ).HistGradientBoostingRegressor(max_iter=80, random_state=seed),
+            "hist_gradient_boosting": HistGradientBoostingRegressor(max_iter=80, random_state=seed),
             "nearest_neighbour": KNeighborsRegressor(n_neighbors=7, weights="distance"),
         }
     if budget == "smoke":

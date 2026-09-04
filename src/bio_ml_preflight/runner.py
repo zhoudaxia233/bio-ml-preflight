@@ -8,6 +8,7 @@ from typing import Any, cast
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
+from sklearn.base import clone
 
 from bio_ml_preflight.audits import (
     apply_identity_conflict_policies,
@@ -37,6 +38,7 @@ from bio_ml_preflight.features import build_feature_frames
 from bio_ml_preflight.models.probes import build_probe_suite, entity_mean_predictions
 from bio_ml_preflight.provenance import HoldoutLedger, build_provenance
 from bio_ml_preflight.reporting import write_report
+from bio_ml_preflight.reporting.render import json_safe
 from bio_ml_preflight.splits import create_split
 from bio_ml_preflight.stability.ranking import ranking_stability, stability_decomposition
 
@@ -284,15 +286,18 @@ def run_case(
                     prediction.to_parquet(prediction_dir / f"{run_id}.parquet", index=False)
                     if model_name != "dummy":
                         ranking_predictions.append(prediction)
-                        groups = _permutation_groups(frame.iloc[train_indices], case)
+                        permutation_unit = case.evaluation.bootstrap_unit
+                        groups = (
+                            frame.iloc[train_indices][permutation_unit].to_numpy()
+                            if permutation_unit
+                            else None
+                        )
                         for draw in range(case.evaluation.permutation_draws):
                             permutation_seed = seed + 10_000 + 1_000 * draw
                             permuted_target = group_respecting_permutation(
                                 target[train_indices], groups, permutation_seed
                             )
-                            perm_model = build_probe_suite(features, case.task.kind, seed, budget)[
-                                model_name
-                            ]
+                            perm_model = clone(model)
                             perm_started = time.perf_counter()
                             perm_model.fit(features.loc[train_indices], permuted_target)
                             with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
@@ -329,15 +334,17 @@ def run_case(
                                 f"{scenario.name}__{representation}__{model_name}__"
                                 f"permuted-{draw}__seed-{seed}"
                             )
-                            permutation_frame = frame.iloc[test_indices].copy()
-                            permutation_frame["_row_id"] = test_indices
-                            permutation_frame["y_true"] = target[test_indices]
-                            permutation_frame["y_pred"] = perm_prediction
-                            permutation_frame["is_test"] = True
-                            permutation_frame["run_id"] = permutation_run_id
-                            permutation_frame["scenario"] = scenario.name
-                            permutation_frame["model"] = model_name
-                            permutation_frame["representation"] = representation
+                            permutation_frame = _prediction_frame(
+                                frame,
+                                target,
+                                np.asarray(perm_prediction),
+                                test_indices,
+                                test_indices,
+                                permutation_run_id,
+                                scenario.name,
+                                model_name,
+                                representation,
+                            )
                             permutation_frame["permuted"] = True
                             permutation_frame["permutation_draw"] = draw
                             permutation_frame.to_parquet(
@@ -396,15 +403,17 @@ def run_case(
                                 ),
                             )
                         )
-                        baseline_frame = frame.iloc[test_indices].copy()
-                        baseline_frame["_row_id"] = test_indices
-                        baseline_frame["y_true"] = target[test_indices]
-                        baseline_frame["y_pred"] = baseline_prediction
-                        baseline_frame["is_test"] = True
-                        baseline_frame["run_id"] = run_id
-                        baseline_frame["scenario"] = scenario.name
-                        baseline_frame["model"] = model_name
-                        baseline_frame["representation"] = "not_applicable"
+                        baseline_frame = _prediction_frame(
+                            frame,
+                            target,
+                            baseline_prediction,
+                            test_indices,
+                            test_indices,
+                            run_id,
+                            scenario.name,
+                            model_name,
+                            "not_applicable",
+                        )
                         baseline_frame.to_parquet(prediction_dir / f"{run_id}.parquet", index=False)
     experiments = pd.DataFrame(records)
     learning_curve = pd.DataFrame(
@@ -461,17 +470,18 @@ def run_case(
         "holdout_access": holdout_access,
         "provenance": provenance,
     }
+    structured = json_safe(structured)
     write_report(
         output,
         case=case,
-        structured=_json_safe(structured),
+        structured=structured,
         experiments=experiments,
         ranking_table=ranking_table,
     )
     (output / "provenance.json").write_text(
         json.dumps(provenance, indent=2, sort_keys=True), encoding="utf-8"
     )
-    return cast(dict[str, Any], _json_safe(structured))
+    return cast(dict[str, Any], structured)
 
 
 def _require_model_readiness(readiness: dict[str, Any]) -> None:
@@ -687,11 +697,6 @@ def _prediction_frame(
     return result
 
 
-def _permutation_groups(frame: pd.DataFrame, case: CaseSpec) -> npt.NDArray[Any] | None:
-    column = case.evaluation.bootstrap_unit
-    return frame[column].to_numpy() if column and column in frame else None
-
-
 def _ranking_group_column(case: CaseSpec) -> str | None:
     group = case.decision.group_entity
     if not group:
@@ -753,7 +758,7 @@ def _learning_curve(
         )
         if not subset_readiness["model_fitting_allowed"]:
             continue
-        model = build_probe_suite(features, case.task.kind, seed, budget)[model_name]
+        model = clone(suite[model_name])
         model.fit(features.loc[subset], target[subset])
         with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
             if case.task.kind == "binary_classification":
@@ -881,15 +886,3 @@ def _experiment_summary(experiments: pd.DataFrame, primary: str) -> list[dict[st
             }
         )
     return result
-
-
-def _json_safe(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {str(key): _json_safe(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_json_safe(item) for item in value]
-    if isinstance(value, np.generic):
-        value = value.item()
-    if isinstance(value, float) and not np.isfinite(value):
-        return None
-    return value

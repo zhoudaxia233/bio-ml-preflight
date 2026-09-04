@@ -2,12 +2,11 @@ import numpy as np
 import pandas as pd
 
 from bio_ml_preflight.evaluation.metrics import (
-    bootstrap_interval,
     compute_metrics,
     empirical_permutation_summary,
     group_respecting_permutation,
 )
-from bio_ml_preflight.stability.ranking import jaccard, ranking_stability
+from bio_ml_preflight.stability.ranking import ranking_stability
 
 
 def test_group_permutation_preserves_equal_size_label_blocks() -> None:
@@ -52,19 +51,6 @@ def test_binary_metrics_use_the_declared_classification_threshold() -> None:
     assert result["balanced_accuracy"] == 1.0
 
 
-def test_bootstrap_resamples_independent_units() -> None:
-    frame = pd.DataFrame({"patient": np.repeat(["a", "b", "c"], 4), "value": np.arange(12.0)})
-    result = bootstrap_interval(
-        frame,
-        unit_column="patient",
-        statistic=lambda values: float(values["value"].mean()),
-        seed=7,
-        draws=100,
-    )
-    assert result["unit_count"] == 3
-    assert result["lower"] < result["estimate"] < result["upper"]
-
-
 def test_top_k_overlap_and_rank_stability() -> None:
     rows = []
     for run_id, scores in {"r1": [4, 3, 2, 1], "r2": [4, 2, 3, 1]}.items():
@@ -77,6 +63,5 @@ def test_top_k_overlap_and_rank_stability() -> None:
         k_values=[2],
         higher_is_better=True,
     )
-    assert jaccard({"a", "b"}, {"a", "c"}) == 1 / 3
     assert summary["top_k"]["2"]["average_pairwise_jaccard"] == 1 / 3
     assert set(memberships["selection_probability"]) == {0.5, 1.0}

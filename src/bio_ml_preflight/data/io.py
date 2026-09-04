@@ -25,8 +25,5 @@ def dataset_fingerprint(frame: pd.DataFrame, columns: list[str] | None = None) -
 
 
 def file_checksum(path: Path) -> str:
-    digest = hashlib.sha256()
     with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+        return hashlib.file_digest(handle, "sha256").hexdigest()

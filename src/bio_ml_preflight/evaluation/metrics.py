@@ -74,35 +74,6 @@ def compute_metrics(
     }
 
 
-def bootstrap_interval(
-    values: pd.DataFrame,
-    *,
-    unit_column: str,
-    statistic: Callable[[pd.DataFrame], float],
-    seed: int = 2026,
-    draws: int = 400,
-    confidence: float = 0.95,
-) -> dict[str, float]:
-    if unit_column not in values:
-        raise ValueError(f"Independent bootstrap unit {unit_column!r} is missing")
-    groups = list(values.groupby(unit_column, sort=False).groups.values())
-    if len(groups) < 2:
-        raise ValueError("At least two independent units are required for bootstrap")
-    rng = np.random.default_rng(seed)
-    estimates = []
-    for _ in range(draws):
-        sampled = rng.integers(0, len(groups), size=len(groups))
-        positions = np.concatenate([np.asarray(groups[index]) for index in sampled])
-        estimates.append(statistic(values.loc[positions]))
-    alpha = (1 - confidence) / 2
-    return {
-        "estimate": float(statistic(values)),
-        "lower": float(np.nanquantile(estimates, alpha)),
-        "upper": float(np.nanquantile(estimates, 1 - alpha)),
-        "unit_count": float(len(groups)),
-    }
-
-
 def empirical_permutation_summary(
     observed: float, null_values: Iterable[float], *, higher_is_better: bool = True
 ) -> dict[str, float | int | None]:

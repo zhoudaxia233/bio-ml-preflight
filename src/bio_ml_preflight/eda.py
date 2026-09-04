@@ -13,6 +13,7 @@ from bio_ml_preflight.contracts import CaseSpec
 from bio_ml_preflight.contracts.case import unconfirmed_roles
 from bio_ml_preflight.data import read_table
 from bio_ml_preflight.features import model_feature_columns
+from bio_ml_preflight.reporting.render import json_safe
 
 HTML_TEMPLATE = """<!doctype html>
 <html lang="en">
@@ -93,7 +94,7 @@ def run_eda(case: CaseSpec, output: Path) -> dict[str, Any]:
         if source_record_path.is_file()
         else {}
     )
-    structured = _json_safe(
+    structured = json_safe(
         {
             "schema_version": 1,
             "mode": "evidence_oriented_eda",
@@ -808,15 +809,3 @@ def _pyplot() -> Any:
 
 def _markdown(value: Any) -> str:
     return str(value).replace("|", "\\|").replace("\n", " ")
-
-
-def _json_safe(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {str(key): _json_safe(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_json_safe(item) for item in value]
-    if isinstance(value, np.generic):
-        value = value.item()
-    if isinstance(value, float) and not np.isfinite(value):
-        return None
-    return value
