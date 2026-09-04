@@ -1,7 +1,9 @@
 # Repository guidance
 
-- At the start of a task, read the local `Plan.md` when it exists and continue its
-  first incomplete work item; keep that file local and never commit it.
+- At the start of a task, read the local `Plan.md` when it exists for context,
+  then follow the current user request. Resume its first incomplete work item
+  only when the user asks to continue the planned work and it fits the current
+  scope; keep that file local and never commit it.
 - Treat generated JSON and Parquet artifacts as the numerical source of truth.
 - Do not infer biological meaning from a column name.
 - Preserve split manifests and never expose holdout labels to adaptive probing.
