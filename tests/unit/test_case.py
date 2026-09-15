@@ -98,8 +98,21 @@ def test_graph_readiness_requires_a_declared_nonrandom_scenario() -> None:
 def test_optional_graph_contract_does_not_change_a_locked_case_fingerprint() -> None:
     root = Path(__file__).resolve().parents[2]
     case = load_case(root / "examples" / "petbd_external" / "case.yaml")
-    legacy_payload = case.model_dump_json(exclude={"graph_readiness"}, exclude_none=False)
+    legacy_payload = case.model_dump_json(
+        exclude={"graph_readiness": True, "generalization_scenarios": {"__all__": {"split_claim"}}},
+        exclude_none=False,
+    )
     legacy_fingerprint = hashlib.sha256(legacy_payload.encode()).hexdigest()
 
     assert case.graph_readiness is None
     assert case.fingerprint() == legacy_fingerprint
+
+
+def test_split_claim_requires_distinct_context() -> None:
+    from bio_ml_preflight.contracts.case import SplitClaimSpec
+
+    for context in [None, "drug"]:
+        with pytest.raises(ValidationError):
+            SplitClaimSpec(
+                kind="same_entity_across_context", entity_column="drug", context_column=context
+            )

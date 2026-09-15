@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -106,6 +106,22 @@ class DecisionSpec(StrictModel):
     k: list[int] = Field(default_factory=lambda: [5, 10])
 
 
+class SplitClaimSpec(StrictModel):
+    """Researcher-declared boundary; not inferred from names or the split strategy."""
+
+    kind: Literal["unseen_entity", "same_entity_across_context"]
+    entity_column: str = Field(min_length=1)
+    context_column: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def validate_context(self) -> SplitClaimSpec:
+        if self.kind == "same_entity_across_context" and not self.context_column:
+            raise ValueError("same_entity_across_context requires context_column")
+        if self.context_column == self.entity_column:
+            raise ValueError("context_column must differ from entity_column")
+        return self
+
+
 class ScenarioSpec(StrictModel):
     name: str
     strategy: Literal[
@@ -123,6 +139,7 @@ class ScenarioSpec(StrictModel):
     left_column: str | None = None
     right_column: str | None = None
     split_column: str | None = None
+    split_claim: SplitClaimSpec | None = None
 
     @model_validator(mode="after")
     def validate_strategy_fields(self) -> ScenarioSpec:
@@ -243,7 +260,16 @@ class CaseSpec(StrictModel):
         return self
 
     def fingerprint(self) -> str:
-        exclude = {"graph_readiness"} if self.graph_readiness is None else None
+        # Preserve fingerprints of existing locked cases when the optional claim is absent.
+        exclude: dict[str, Any] = {
+            "generalization_scenarios": {
+                index: {"split_claim"}
+                for index, scenario in enumerate(self.generalization_scenarios)
+                if scenario.split_claim is None
+            }
+        }
+        if self.graph_readiness is None:
+            exclude["graph_readiness"] = True
         payload = self.model_dump_json(exclude=exclude, exclude_none=False)
         return hashlib.sha256(payload.encode()).hexdigest()
 

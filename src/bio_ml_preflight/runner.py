@@ -126,7 +126,7 @@ def run_case(
             manifest = manifests[(scenario.name, seed)]
             train_indices = np.asarray(manifest.train_indices)
             test_indices = np.asarray(manifest.test_indices)
-            overlap = audit_overlap(frame, train_indices, test_indices, case)
+            overlap = audit_overlap(frame, train_indices, test_indices, case, scenario)
             if case.task.kind == "binary_classification":
                 counts, unit = _test_target_counts(frame, test_indices, case)
                 overlap["test_target_counts"] = counts

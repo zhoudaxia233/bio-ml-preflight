@@ -388,3 +388,104 @@ def test_graph_readiness_contract_is_deterministic_and_counts_independent_suppor
     invalid.loc[0, "smiles"] = ""
     with pytest.raises(ValueError, match="invalid structures"):
         audit_graph_readiness_contract(invalid, case, {"status": "NO_CONFLICTS"})
+
+
+@pytest.mark.parametrize(
+    "claim,expected",
+    [
+        (None, "NOT_ASSESSABLE"),
+        ({"kind": "unseen_entity", "entity_column": "drug"}, "INCOMPATIBLE"),
+        (
+            {
+                "kind": "same_entity_across_context",
+                "entity_column": "drug",
+                "context_column": "plate",
+            },
+            "COMPATIBLE",
+        ),
+    ],
+)
+def test_same_partition_has_claim_specific_verdict(tmp_path, claim, expected) -> None:
+    frame = pd.DataFrame({"drug": ["a", "b", "a", "b"], "plate": [1, 1, 2, 2]})
+    case = synthetic_case("no_signal", tmp_path / "unused")
+    case.entities = {"drug": EntitySpec(id_column="drug"), "plate": EntitySpec(id_column="plate")}
+    case.data.fingerprint_columns = ["drug", "plate"]
+    case.generalization_scenarios = [
+        ScenarioSpec(
+            name="unseen drugs is just a name",
+            strategy="supplied",
+            split_column="partition",
+            split_claim=claim,
+        )
+    ]
+    result = audit_overlap(frame, np.array([0, 1]), np.array([2, 3]), case)
+    assert result["entity_overlap"]["drug"]["count"] == 2
+    verdict = result["split_claim_assessment"]
+    assert verdict["status"] == expected
+    assert verdict["scope"] and verdict["reason"] and verdict["cheapest_next_evidence"]
+    if claim:
+        assert verdict["evidence"]["drug"]["test_fraction"] == 1
+
+
+@pytest.mark.parametrize(
+    "drugs,plates,kind,expected",
+    [
+        (["a", "b", "c", "d"], [1, 1, 2, 2], "unseen_entity", "COMPATIBLE"),
+        (["a", "b", "a", "c"], [1, 1, 2, 2], "same_entity_across_context", "INCOMPATIBLE"),
+        (["a", "b", "a", "b"], [1, 1, 1, 2], "same_entity_across_context", "INCOMPATIBLE"),
+        (["a", "b", "a", None], [1, 1, 2, 2], "same_entity_across_context", "NOT_ASSESSABLE"),
+        (["a", "b", "a", "b"], [1, 1, None, 2], "same_entity_across_context", "NOT_ASSESSABLE"),
+    ],
+)
+def test_claim_checks_coverage_missingness_and_context(tmp_path, drugs, plates, kind, expected):
+    frame = pd.DataFrame({"drug": drugs, "plate": plates})
+    case = synthetic_case("no_signal", tmp_path / "unused")
+    case.entities = {}
+    case.data.fingerprint_columns = ["drug", "plate"]
+    scenario = ScenarioSpec(
+        name="check",
+        strategy="random",
+        split_claim={
+            "kind": kind,
+            "entity_column": "drug",
+            "context_column": "plate",
+        },
+    )
+    result = audit_overlap(frame, np.array([0, 1]), np.array([2, 3]), case, scenario)
+    assert result["split_claim_assessment"]["status"] == expected
+    missing = frame.drop(columns="plate")
+    case.data.fingerprint_columns = ["drug"]
+    assert (
+        audit_overlap(missing, np.array([0]), np.array([2]), case, scenario)[
+            "split_claim_assessment"
+        ]["status"]
+        == "NOT_ASSESSABLE"
+    )
+    assert (
+        audit_overlap(frame, np.array([], dtype=np.int64), np.array([2]), case, scenario)[
+            "split_claim_assessment"
+        ]["status"]
+        == "NOT_ASSESSABLE"
+    )
+
+
+def test_identifier_word_boundaries_preserve_shapes_and_real_ids(tmp_path) -> None:
+    shapes = [f"{part}_AreaShape_Solidity" for part in ["Cells", "Cytoplasm", "Nuclei"]]
+    ids = [
+        "sample_id",
+        "SampleID",
+        "sampleId",
+        "ID",
+        "Metadata_ID",
+        "accessToken",
+        "identifier",
+        "specimen",
+    ]
+    frame = pd.DataFrame({name: [0.1, 0.2, 0.3, 0.4] for name in shapes + ids})
+    frame["y"] = [0, 1, 0, 1]
+    case = synthetic_case("no_signal", tmp_path / "unused")
+    case.task.target_column = "y"
+    case.entities = {"specimen": EntitySpec(id_column="specimen")}
+    case.features.include = shapes + ids
+    result = audit_dataset(frame, case)
+    assert set(result["leakage"]["suspicious_identifier_features"]) == set(ids)

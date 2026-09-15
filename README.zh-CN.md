@@ -188,3 +188,38 @@ uv run ruff format --check .
 uv run mypy src
 uv run pytest
 ```
+
+### 根据验证目的解释划分（无需训练）
+
+在已有 `generalization_scenarios` 场景中声明可选的 `split_claim`：
+
+```yaml
+- name: repeat_across_plates
+  strategy: supplied
+  split_column: partition
+  split_claim:
+    kind: same_entity_across_context
+    entity_column: perturbation_id
+    context_column: plate
+```
+
+- 验证未见实体：改为 `kind: unseen_entity`，保留 `entity_column`，省略
+  `context_column`。两侧有任何身份重叠，就不符合这一验证目的。
+- 比较同一处理跨板的重复性：如上声明。要求所有评估处理都出现在参照组，且实验板不重叠。
+  此时处理身份重叠是必要条件。
+- 未声明目的、划分为空、所需列或身份值缺失：明确 `NOT_ASSESSABLE`，不根据场景名称猜测。
+
+调用现有 `audit_overlap(frame, train_indices, test_indices, case, scenario)`，即可获得
+`split_claim_assessment`：验证目的、实际计数与覆盖率、判定、理由、适用范围和最小下一步。
+只有一个场景时可以省略 `scenario`；多个场景时需明确选择。划分身份检查不读取目标值，
+不修改原划分。EDA 仍只分析训练数据；它不承担跨划分判定。
+
+`COMPATIBLE` 仅表示声明的身份与分组条件符合，不能证明预测有效、处理稳定、生物学重复独立
+或生物学结论成立。处理标识是否代表药物、剂量/时间等条件是否匹配、独立培养来源是什么，
+仍需要正确声明或其他证据。报告将该判定与模型表现分开；明确声明的目的若划分不符合或
+证据缺失，模型能力判定为 `NOT_ASSESSABLE`，保留原始分数。旧任务的模型分数判定也不能
+替代缺失的验证目的。
+
+标识符候选检测识别已声明的实体 ID，以及完整的 `id`、`identifier`、`token` 词
+（含下划线和驼峰命名），沿用原有基数门槛。不会再把 `Solidity` 中的字母片段 `id` 当成
+ID；候选标记仍需复核，不等于泄漏，也不会自动删除特征。

@@ -399,3 +399,52 @@ def test_declared_metadata_must_exist_before_feature_construction(
 
     with pytest.raises(ValueError, match="missing_batch"):
         runner_module.run_case(case, tmp_path / "report")
+
+
+def test_run_reports_claim_assessment_for_each_supplied_scenario(tmp_path: Path) -> None:
+    path = tmp_path / "repeated.parquet"
+    pd.DataFrame(
+        {
+            "drug": ["a", "b", "c", "d"] * 2,
+            "plate": [1] * 4 + [2] * 4,
+            "partition": ["train"] * 4 + ["test"] * 4,
+            "x": [0.1, 0.2, 0.3, 0.4] * 2,
+            "y": [0.0, 0.1, 0.8, 1.0] * 2,
+        }
+    ).to_parquet(path)
+    case = synthetic_case("no_signal", path)
+    case.entities = {}
+    case.features.include = ["x"]
+    case.data.fingerprint_columns = ["drug", "plate"]
+    case.generalization_scenarios = [
+        ScenarioSpec(name=name, strategy="supplied", split_column="partition", split_claim=claim)
+        for name, claim in [
+            ("missing", None),
+            ("unseen", {"kind": "unseen_entity", "entity_column": "drug"}),
+            (
+                "repeat",
+                {
+                    "kind": "same_entity_across_context",
+                    "entity_column": "drug",
+                    "context_column": "plate",
+                },
+            ),
+        ]
+    ]
+    case.evaluation = EvaluationSpec(seeds=[11], permutation_draws=1)
+    output = tmp_path / "report"
+    result = runner_module.run_case(case, output, model_allowlist={"dummy"})
+    for name, expected in [
+        ("missing", "NOT_ASSESSABLE"),
+        ("unseen", "INCOMPATIBLE"),
+        ("repeat", "COMPATIBLE"),
+    ]:
+        assessment = result["split_overlap"][f"{name}:11"]["split_claim_assessment"]
+        assert assessment["status"] == expected
+    for filename in ["report.json", "report.md", "report.html"]:
+        text = (output / filename).read_text()
+        assert "Shared entity identities invalidate an unseen-entity validation" in text
+        assert "shared entity identities are required for this repeat comparison" in text
+        assert "No explicit split claim was declared" in text
+        assert "Does not establish predictive performance" in text
+    assert not pd.read_parquet(output / "capability_matrix.parquet").empty
