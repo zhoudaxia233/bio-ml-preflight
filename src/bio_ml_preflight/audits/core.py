@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from numbers import Real
 from typing import Any, cast
 
@@ -10,6 +11,7 @@ import numpy.typing as npt
 import pandas as pd
 
 from bio_ml_preflight.contracts import CaseSpec
+from bio_ml_preflight.contracts.case import ScenarioSpec
 from bio_ml_preflight.data import dataset_fingerprint
 from bio_ml_preflight.features import model_feature_columns
 
@@ -40,10 +42,11 @@ def audit_dataset(frame: pd.DataFrame, case: CaseSpec) -> dict[str, Any]:
     ]
     configured_features = model_feature_columns(frame.columns, case)
     modeled_features = [column for column in configured_features if column in frame]
+    declared_ids = {entity.id_column for entity in case.entities.values()}
     suspicious = [
         column
         for column in modeled_features
-        if ("id" in column.lower() or "token" in column.lower())
+        if (column in declared_ids or _identifier_name(column))
         and frame[column].nunique(dropna=True) / max(len(frame), 1) > 0.05
     ]
     entities: dict[str, Any] = {}
@@ -621,6 +624,7 @@ def audit_overlap(
     train_indices: npt.NDArray[np.int64],
     test_indices: npt.NDArray[np.int64],
     case: CaseSpec,
+    scenario: ScenarioSpec | None = None,
 ) -> dict[str, Any]:
     train, test = frame.iloc[train_indices], frame.iloc[test_indices]
     entity_overlap: dict[str, Any] = {}
@@ -653,6 +657,10 @@ def audit_overlap(
             "reason": "No similarity function was configured.",
         },
     }
+    selected = scenario
+    if selected is None and len(case.generalization_scenarios) == 1:
+        selected = case.generalization_scenarios[0]
+    result["split_claim_assessment"] = _audit_split_claim(train, test, selected)
     graph = case.graph_readiness
     if graph is not None:
         converted = _canonical_molecular_graphs(frame[graph.structure_column])
@@ -670,4 +678,97 @@ def audit_overlap(
                 "count": len(overlap),
                 "test_fraction": len(overlap) / max(len(test_graphs), 1),
             }
+    return result
+
+
+def _identifier_name(column: str) -> bool:
+    # Separate snake/kebab case and camel-case words; "Solidity" contains no ID word.
+    words = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", column)
+    words = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", words)
+    return bool({"id", "identifier", "token"} & set(re.split(r"[^a-z0-9]+", words.lower())))
+
+
+def _audit_split_claim(
+    train: pd.DataFrame, test: pd.DataFrame, scenario: ScenarioSpec | None
+) -> dict[str, Any]:
+    claim = scenario.split_claim if scenario is not None else None
+    result: dict[str, Any] = {
+        "claim": claim.model_dump() if claim else None,
+        "status": "NOT_ASSESSABLE",
+        "evidence": {},
+        "scope": (
+            "Partition identity compatibility only, conditional on declared column meanings. "
+            "Does not establish predictive performance, measurement stability, independent "
+            "biological replication, batch transport, or a biological/causal conclusion."
+        ),
+        "reason": "No explicit split claim was declared for this partition.",
+        "cheapest_next_evidence": (
+            "Declare unseen_entity or same_entity_across_context and the relevant identity "
+            "and context columns; do not infer purpose from a scenario name."
+        ),
+    }
+    if claim is None:
+        return result
+    columns = [claim.entity_column]
+    if claim.context_column:
+        columns.append(claim.context_column)
+    incomplete = not len(train) or not len(test)
+    for column in columns:
+        if column not in train or column not in test:
+            result["evidence"][column] = {"status": "NOT_ASSESSABLE", "reason": "missing column"}
+            incomplete = True
+            continue
+        left, right = set(train[column].dropna()), set(test[column].dropna())
+        missing = int(train[column].isna().sum() + test[column].isna().sum())
+        result["evidence"][column] = {
+            "train_unique": len(left),
+            "test_unique": len(right),
+            "overlap_count": len(left & right),
+            "test_fraction": len(left & right) / len(right) if right else None,
+            "missing_rows": missing,
+        }
+        incomplete = incomplete or bool(missing)
+    if incomplete:
+        result.update(
+            reason="Empty partition, missing identity/context column, or missing identifiers.",
+            cheapest_next_evidence="Provide nonempty partitions and complete declared identifiers.",
+        )
+        return result
+    entity = result["evidence"][claim.entity_column]
+    if claim.kind == "unseen_entity":
+        compatible = entity["overlap_count"] == 0
+        reason = (
+            "No declared entity identities overlap."
+            if compatible
+            else "Shared entity identities invalidate an unseen-entity validation."
+        )
+        remedy = (
+            "Evaluate a prespecified metric on this partition; identity separation alone "
+            "does not establish performance."
+            if compatible
+            else "Reserve whole entity identities across partitions and revalidate; "
+            "do not reuse this result as unseen-entity evidence."
+        )
+    else:
+        context = result["evidence"][claim.context_column]
+        compatible = entity["test_fraction"] == 1 and context["overlap_count"] == 0
+        reason = (
+            "All evaluation entities also occur in reference data and contexts are disjoint; "
+            "shared entity identities are required for this repeat comparison."
+            if compatible
+            else "Same-entity comparison requires every evaluation entity in "
+            "reference data and disjoint contexts."
+        )
+        remedy = (
+            "Measure paired repeatability under a declared replicate protocol; verify other "
+            "conditions and biological replicate provenance separately."
+            if compatible
+            else "Pair evaluation entities with reference measurements and use "
+            "separate contexts; explicitly restrict the claim to matched entities if needed."
+        )
+    result.update(
+        status="COMPATIBLE" if compatible else "INCOMPATIBLE",
+        reason=reason,
+        cheapest_next_evidence=remedy,
+    )
     return result

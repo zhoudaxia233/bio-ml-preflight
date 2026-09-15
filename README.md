@@ -188,3 +188,49 @@ uv run pytest
 ```
 
 See [architecture](docs/architecture.md), [methodology](docs/methodology.md), [limitations](docs/limitations.md), [Autoprobe](docs/autoresearch.md), and [references](docs/references.md).
+
+### Claim-aware partition audit (without fitting)
+
+Declare a `split_claim` on an existing `generalization_scenarios` entry. Split strategy
+and scenario name describe how rows were divided; they do not establish experimental purpose.
+For example, on a supplied partition:
+
+```yaml
+generalization_scenarios:
+  - name: repeat_across_plates
+    strategy: supplied
+    split_column: partition
+    split_claim:
+      kind: same_entity_across_context
+      entity_column: perturbation_id
+      context_column: plate
+```
+
+Use `kind: unseen_entity` with `entity_column: perturbation_id` for an unseen-identity
+claim (omit `context_column`). Column meanings must be declared by the researcher;
+`perturbation_id` is not automatically interpreted as a drug identity.
+
+`audit_overlap(frame, train_indices, test_indices, case, scenario)` returns
+`split_claim_assessment`: the declaration, observed overlap and coverage, status,
+reason, scope, and cheapest next evidence. Omitting `scenario` selects the sole case
+scenario only; multiple scenarios require an explicit selection. This identity-only
+check reads no target values. It reuses the supplied indices and does not change manifests.
+
+- `unseen_entity`: any shared entity identity makes the partition `INCOMPATIBLE`.
+- `same_entity_across_context`: every evaluation identity must occur in the reference
+  partition and contexts must be disjoint. Identity overlap is required here.
+- No purpose, empty partitions, or incomplete identity/context data: `NOT_ASSESSABLE`.
+- `COMPATIBLE` means these identity conditions hold. It does **not** mean predictive
+  performance, repeatability, independent biological replication, or a biological claim
+  has been established. Other matched conditions and the replicate protocol still need review.
+
+JSON and rendered run reports expose this assessment separately from model capability.
+An explicit claim with an incompatible or unavailable partition audit cannot receive a
+positive model-capability verdict; its metric values remain visible and the verdict becomes
+`NOT_ASSESSABLE`. Legacy metric verdicts remain metric evidence and do not imply that an
+undeclared purpose passed. EDA remains a training-data profile, not a cross-partition audit.
+
+Identifier feature candidates use declared entity IDs or complete `id`, `identifier`, and
+`token` words (including snake/camel case), plus the existing cardinality threshold. An `id`
+substring inside `Solidity` is not an identifier word. These are review candidates, not proof
+of leakage or automatic feature exclusions.

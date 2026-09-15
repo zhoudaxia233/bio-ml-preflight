@@ -226,6 +226,31 @@ def capability_matrix(
         }
         _apply_audit_limits(verdict, audit_summary, combined_overlap)
         rows.append(verdict)
+    # A score cannot rescue a partition that does not test the declared claim.
+    for scenario in case.generalization_scenarios:
+        assessments = [
+            result["split_claim_assessment"]
+            for key, result in (overlap_results or {}).items()
+            if key.rsplit(":", 1)[0] == scenario.name and "split_claim_assessment" in result
+        ]
+        for verdict in rows:
+            if verdict["claim_or_scenario"] != scenario.name:
+                continue
+            if scenario.split_claim is None:
+                continue  # Legacy metric evidence is distinct from claim compatibility.
+            failed = [item for item in assessments if item["status"] != "COMPATIBLE"]
+            if failed or not assessments:
+                verdict["status"] = "NOT_ASSESSABLE"
+                reason = failed[0]["reason"] if failed else "Split claim audit is unavailable."
+                verdict["evidence_against"].append(reason)
+                verdict["unmet_assumptions"].append(
+                    "The partition does not establish the declared claim boundary."
+                )
+                verdict["cheapest_next_evidence"] = (
+                    failed[0]["cheapest_next_evidence"]
+                    if failed
+                    else "Audit the actual partitions against the declared split claim."
+                )
     if case.holdout.enabled:
         for verdict in rows:
             verdict["cheapest_next_evidence"] += (

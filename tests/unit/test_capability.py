@@ -571,3 +571,46 @@ def test_random_split_repeating_bootstrap_units_caps_support(tmp_path, target_co
     assert row["numbers"]["bootstrap_unit_overlap_count"] == 42
     assert any("repeats 42 subject_id" in value for value in row["evidence_against"])
     assert "subject_id held out" in row["cheapest_next_evidence"]
+
+
+@pytest.mark.parametrize(
+    "kind,expected",
+    [("unseen_entity", "NOT_ASSESSABLE"), ("same_entity_across_context", "SUPPORTED")],
+)
+def test_high_score_cannot_rescue_an_incompatible_split_claim(tmp_path, kind, expected):
+    import numpy as np
+
+    from bio_ml_preflight.audits import audit_overlap
+
+    case = synthetic_case("no_signal", tmp_path / "unused")
+    scenario = ScenarioSpec(
+        name="comparison",
+        strategy="supplied",
+        split_column="partition",
+        split_claim={"kind": kind, "entity_column": "drug", "context_column": "plate"},
+    )
+    case.generalization_scenarios = [scenario]
+    case.entities = {}
+    case.data.fingerprint_columns = ["drug", "plate"]
+    frame = pd.DataFrame({"drug": ["a", "b", "a", "b"], "plate": [1, 1, 2, 2]})
+    overlap = audit_overlap(frame, np.array([0, 1]), np.array([2, 3]), case)
+    experiments = pd.DataFrame(
+        [
+            {
+                "scenario": "comparison",
+                "strategy": "supplied",
+                "model": "linear",
+                "permuted": permuted,
+                "spearman": 0.0 if permuted else 0.9,
+                "permutation_draw": draw if permuted else None,
+            }
+            for permuted, draw in [(False, 0)] + [(True, i) for i in range(9)]
+        ]
+    )
+    verdict = capability_matrix(experiments, case, {}, overlap_results={"comparison:11": overlap})[
+        0
+    ]
+    assert verdict["status"] == expected
+    assert verdict["numbers"]["median"] == 0.9
+    missing = capability_matrix(experiments, case, {})[0]
+    assert missing["status"] == "NOT_ASSESSABLE"

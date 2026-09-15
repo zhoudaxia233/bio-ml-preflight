@@ -47,6 +47,10 @@ Identity-consistency gate:
 
 {{ leakage }}
 
+Split claim compatibility (not a biological verdict):
+
+{{ split_claims }}
+
 ## 5. Measurement reliability
 
 {{ measurement }}
@@ -159,6 +163,8 @@ Task: <code>{{ case.task.kind }}</code> for prediction unit
 <pre><code>{{ independence_json }}</code></pre>
 </section>
 <section><h2>4. Leakage findings</h2><pre><code>{{ leakage_json }}</code></pre></section>
+<section><h2>Split claim compatibility</h2>
+<pre><code>{{ split_claims_json }}</code></pre></section>
 <section><h2>5. Measurement reliability</h2><pre><code>{{ measurement_json }}</code></pre></section>
 <section><h2>6. Coverage</h2><pre><code>{{ coverage_json }}</code></pre></section>
 <section><h2>7. Baseline and permutation results</h2>
@@ -321,6 +327,16 @@ def write_report(
             "identity_consistency": structured["audits"]["identity_consistency"],
             "independence": structured["audits"]["independence"],
             "leakage": structured["audits"]["leakage"],
+            "split_claims": {
+                key: value.get(
+                    "split_claim_assessment",
+                    {
+                        "status": "NOT_ASSESSABLE",
+                        "reason": "Legacy artifact has no claim assessment; no pass inferred.",
+                    },
+                )
+                for key, value in structured.get("split_overlap", {}).items()
+            },
             "measurement": structured["audits"]["measurement"],
             "coverage": structured["audits"]["coverage"],
             "learning_curve": structured["learning_curve"],
