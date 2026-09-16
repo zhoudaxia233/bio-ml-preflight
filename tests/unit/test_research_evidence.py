@@ -176,6 +176,21 @@ def test_different_models_do_not_supply_each_others_missing_partitions():
     assert result["median_standard_deviation"] is None
 
 
+def test_undefined_metric_does_not_hide_missing_partition_metadata():
+    runs = controlled_runs(("a", "b"))
+    incomplete = runs[runs.permuted.eq(False)].iloc[[0]].copy()
+    incomplete["seed"] = 47
+    incomplete["partition_fingerprint"] = None
+    incomplete["spearman"] = np.nan
+    runs = pd.concat([runs, incomplete], ignore_index=True)
+
+    result = stability_decomposition(runs, "spearman")["train_validation_split"]
+
+    assert result["status"] == "NOT_ASSESSABLE"
+    assert result["median_standard_deviation"] is None
+    assert "not recorded for every run" in result["reason"]
+
+
 @pytest.mark.parametrize(
     "method,unit,label",
     [

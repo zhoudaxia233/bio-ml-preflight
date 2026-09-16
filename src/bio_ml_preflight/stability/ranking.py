@@ -121,11 +121,8 @@ def partition_variation(experiments: pd.DataFrame, primary_metric: str) -> dict[
 
 
 def stability_decomposition(experiments: pd.DataFrame, primary_metric: str) -> dict[str, Any]:
-    usable = experiments[
-        experiments["model"].ne("dummy")
-        & experiments["permuted"].eq(False)
-        & experiments[primary_metric].notna()
-    ]
+    real = experiments[experiments["model"].ne("dummy") & experiments["permuted"].eq(False)]
+    usable = real[real[primary_metric].notna()]
     if usable.empty:
         return {
             key: {"status": "NOT_ASSESSABLE", "reason": "no finite experiment metrics"}
@@ -153,7 +150,7 @@ def stability_decomposition(experiments: pd.DataFrame, primary_metric: str) -> d
             "status": "NOT_ASSESSABLE",
             "reason": "v0.1 smoke runs do not cross training seeds with fixed split manifests",
         },
-        "train_validation_split": partition_variation(usable, primary_metric),
+        "train_validation_split": partition_variation(real, primary_metric),
         "model_family": {
             "status": "ASSESSED",
             "median_standard_deviation": float(model_std.median()) if len(model_std) else None,
