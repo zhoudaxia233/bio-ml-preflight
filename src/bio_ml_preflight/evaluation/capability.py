@@ -11,6 +11,7 @@ from bio_ml_preflight.evaluation.metrics import (
     empirical_permutation_summary,
     metric_higher_is_better,
 )
+from bio_ml_preflight.stability.ranking import partition_variation
 
 Status = str
 
@@ -62,8 +63,11 @@ def capability_matrix(
         best = real[real["model"].eq(best_model)][primary].dropna()
         perm = control[control["model"].eq(best_model)][primary].dropna()
         metric = float(best.median())
-        dispersion = float(best.std()) if len(best) > 1 else 0.0
+        dispersion = float(best.std()) if len(best) > 1 else None
         model_control = control[control["model"].eq(best_model)]
+        permutation_design = _permutation_design(model_control)
+        permutation_label = permutation_design["description"]
+        split_variation = partition_variation(real[real["model"].eq(best_model)], primary)
         if "permutation_draw" in model_control and model_control["permutation_draw"].notna().any():
             null_statistics = (
                 model_control.groupby("permutation_draw")[primary].median().dropna().tolist()
@@ -88,11 +92,13 @@ def capability_matrix(
             "permutation_q95": permutation_summary["q95"],
             "permutation_p_value": permutation_p_value,
             "permutation_draws": permutation_summary["draws"],
+            "permutation_design": permutation_design,
+            "split_variation": split_variation,
         }
         if not higher_is_better:
             numbers["permutation_q05"] = permutation_summary["q05"]
         low_metric = direction * metric < direction * case.thresholds.limited_metric
-        high_dispersion = dispersion > case.thresholds.maximum_dispersion
+        high_dispersion = dispersion is not None and dispersion > case.thresholds.maximum_dispersion
         metric_evidence = f"Best baseline median {primary}={metric:.3f} ({best_model})."
         evidence_for = [] if low_metric else [metric_evidence]
         evidence_against: list[str] = []
@@ -105,16 +111,16 @@ def capability_matrix(
             and permutation_p_value <= case.thresholds.maximum_permutation_p_value
         )
         if delta is None:
-            evidence_against.append("Delta over grouped permutation control is unavailable.")
+            evidence_against.append(f"Delta over {permutation_label} control is unavailable.")
         else:
             (evidence_for if adequate_delta else evidence_against).append(
-                f"Delta over grouped permutation control={delta:.3f}."
+                f"Delta over {permutation_label} control={delta:.3f}."
             )
         if permutation_p_value is None:
-            evidence_against.append("Empirical grouped-permutation p-value is unavailable.")
+            evidence_against.append(f"Empirical {permutation_label} p-value is unavailable.")
         else:
             (evidence_for if adequate_permutation_p else evidence_against).append(
-                f"Empirical grouped-permutation p={permutation_p_value:.3f} "
+                f"Empirical {permutation_label} p={permutation_p_value:.3f} "
                 f"from {permutation_summary['draws']} draws."
             )
         if scenario.strategy not in {"random", "random_pair"} and random_median is not None:
@@ -122,7 +128,7 @@ def capability_matrix(
         weak_permutation = not (adequate_delta and adequate_permutation_p)
         if high_dispersion:
             evidence_against.append(
-                f"Split dispersion {dispersion:.3f} exceeds the configured limit."
+                f"Across-run dispersion {dispersion:.3f} exceeds the configured limit."
             )
         if weak_permutation:
             unmet.append("Permutation separation is insufficient.")
@@ -131,7 +137,7 @@ def capability_matrix(
                 "The controlled baseline does not meet the configured usefulness threshold."
             )
         if high_dispersion:
-            unmet.append("Performance is unstable across the evaluated splits.")
+            unmet.append("Performance is unstable across the evaluated runs.")
         leakage_contradiction = (
             scenario.strategy not in {"random", "random_pair"}
             and random_median is not None
@@ -139,7 +145,7 @@ def capability_matrix(
             and low_metric
         )
         next_step = (
-            "Inspect development errors and split-to-split variation using existing predictions; "
+            "Inspect development errors and run-to-run variation using existing predictions; "
             "this evidence does not identify whether more independent units would help."
         )
         if leakage_contradiction:
@@ -170,13 +176,27 @@ def capability_matrix(
             next_step = "Confirm once on a prospectively reserved or pseudo-sealed external set."
         else:
             status = "SUPPORTED_WITH_LIMITS"
-            unmet.append("Evidence is moderate or sensitive to the sampled split.")
+            unmet.append("Evidence is moderate or varies across evaluated runs.")
+        uncertainty = (
+            f"Across-run standard deviation={dispersion:.3f}. "
+            if dispersion is not None
+            else "Across-run variation NOT_ASSESSABLE: one finite run. "
+        )
+        if split_variation["status"] == "ASSESSED":
+            uncertainty += (
+                "Across distinct partition medians, standard deviation="
+                f"{split_variation['median_standard_deviation']:.3f}; "
+                "training initialization is not separated from split effects. "
+            )
+        else:
+            uncertainty += f"Split variation NOT_ASSESSABLE: {split_variation['reason']} "
+        uncertainty += "Permutation exchangeability is not assessed."
         verdict = _verdict(
             scenario.name,
             status,
             evidence_for,
             evidence_against,
-            f"Across-split standard deviation={dispersion:.3f}.",
+            uncertainty,
             unmet,
             next_step,
             numbers,
@@ -220,6 +240,7 @@ def capability_matrix(
             for key in {
                 "exact_duplicate_overlap",
                 "pair_overlap",
+                "expected_pair_overlap",
                 "protected_entity_overlap_count",
                 "protected_entity_overlap_fraction",
             }
@@ -260,6 +281,41 @@ def capability_matrix(
         rows.append(_measurement_verdict(audits.get("measurement", {})))
         rows.extend(_missing_metadata_verdicts(audits.get("missing_high_value_metadata", [])))
     return rows
+
+
+def _permutation_design(control: pd.DataFrame) -> dict[str, Any]:
+    method = "unrecorded"
+    unit = None
+    if (
+        not control.empty
+        and "permutation_method" in control
+        and control["permutation_method"].notna().all()
+    ):
+        methods = control["permutation_method"].unique()
+        method = str(methods[0]) if len(methods) == 1 else "mixed"
+        if "permutation_unit" in control and control["permutation_unit"].notna().all():
+            units = control["permutation_unit"].unique()
+            unit = str(units[0]) if len(units) == 1 else None
+    if method == "row":
+        description = "row permutation"
+        unit = None
+    elif method == "equal_size_group_blocks_within_group_shuffle":
+        description = (
+            "equal-size group-block permutation with within-group label shuffling "
+            f"(unit: {unit or 'unrecorded'})"
+        )
+    else:
+        description = f"permutation (method {method})"
+    return {
+        "method": method,
+        "unit": unit,
+        "description": description,
+        "exchangeability": "NOT_ASSESSABLE",
+        "scope": (
+            "Executed control only. The researcher must justify which labels may be exchanged. "
+            "Within-group shuffling does not preserve longitudinal order or visit alignment."
+        ),
+    }
 
 
 def _audit_conflicts(audits: dict[str, Any]) -> dict[str, int]:
@@ -313,6 +369,7 @@ def _overlap_summary(
     summary: dict[str, Any] = {
         "exact_duplicate_overlap": 0,
         "pair_overlap": 0,
+        "expected_pair_overlap": 0,
         "protected_entity_overlap_count": 0,
         "protected_entity_overlap_fraction": 0.0,
         "bootstrap_unit_overlap_count": 0,
@@ -320,16 +377,24 @@ def _overlap_summary(
         "test_target_counts": {},
         "test_target_count_unit": None,
     }
+    claim_statuses = []
     for key, result in overlap_results.items():
         if key.rsplit(":", 1)[0] != scenario.name:
             continue
+        claim_statuses.append(result.get("split_claim_assessment", {}).get("status"))
         summary["exact_duplicate_overlap"] = max(
             int(summary["exact_duplicate_overlap"]),
             int(result.get("exact_duplicate_overlap", 0)),
         )
-        summary["pair_overlap"] = max(
-            int(summary["pair_overlap"]), int(result.get("pair_overlap") or 0)
+        claim = scenario.split_claim
+        expected_pair = (
+            claim is not None
+            and claim.kind == "same_entity_across_context"
+            and result.get("split_claim_assessment", {}).get("status") == "COMPATIBLE"
+            and claim.entity_column in result.get("pair_columns", [])
         )
+        pair_key = "expected_pair_overlap" if expected_pair else "pair_overlap"
+        summary[pair_key] = max(int(summary[pair_key]), int(result.get("pair_overlap") or 0))
         target_counts = result.get("test_target_counts", {})
         if target_counts:
             minimum_counts = summary["test_target_counts"]
@@ -367,6 +432,9 @@ def _overlap_summary(
                 float(summary["bootstrap_unit_overlap_fraction"]),
                 float(entity_overlap.get("test_fraction", 0.0)),
             )
+    summary["claim_compatible"] = bool(claim_statuses) and all(
+        status == "COMPATIBLE" for status in claim_statuses
+    )
     return summary
 
 
@@ -383,12 +451,24 @@ def _apply_random_split_limit(
         return
     fraction = float(overlap.get("bootstrap_unit_overlap_fraction", 0.0))
     unit = case.evaluation.bootstrap_unit or "independent unit"
+    verdict["numbers"]["bootstrap_unit_overlap_count"] = count
+    verdict["numbers"]["bootstrap_unit_overlap_fraction"] = fraction
+    claim = scenario.split_claim
+    if (
+        claim is not None
+        and claim.kind == "same_entity_across_context"
+        and claim.entity_column == case.evaluation.bootstrap_unit
+        and overlap.get("claim_compatible")
+    ):
+        verdict["evidence_supporting"].append(
+            f"Shared {unit} identities are required for the declared cross-context comparison; "
+            "this does not assess unseen-unit generalization."
+        )
+        return
     verdict["evidence_against"].append(
         f"The random-split diagnostic repeats {count} {unit} values across train and test "
         f"(maximum test fraction {fraction:.3%})."
     )
-    verdict["numbers"]["bootstrap_unit_overlap_count"] = count
-    verdict["numbers"]["bootstrap_unit_overlap_fraction"] = fraction
     verdict["unmet_assumptions"].append(
         "A random split does not assess generalization to unseen independent units."
     )
@@ -423,6 +503,7 @@ def _apply_audit_limits(
         verdict["unmet_assumptions"].append("Entity-to-representation consistency requires review.")
     exact_overlap = int(overlap.get("exact_duplicate_overlap", 0))
     pair_overlap = int(overlap.get("pair_overlap", 0))
+    expected_pair_overlap = int(overlap.get("expected_pair_overlap", 0))
     protected_overlap = int(overlap.get("protected_entity_overlap_count", 0))
     if exact_overlap:
         verdict["evidence_against"].append(
@@ -434,6 +515,19 @@ def _apply_audit_limits(
             f"Up to {pair_overlap} entity pairs overlap train and test."
         )
         verdict["numbers"]["pair_overlap"] = pair_overlap
+    if expected_pair_overlap:
+        verdict["evidence_supporting"].append(
+            f"Up to {expected_pair_overlap} overlapping entity pairs are compatible with the "
+            "declared same-entity comparison across contexts. Identity compatibility alone "
+            "does not establish measurement reliability or independent biological replication."
+        )
+        verdict["numbers"]["expected_pair_overlap"] = expected_pair_overlap
+        if verdict["status"] == "SUPPORTED":
+            verdict["cheapest_next_evidence"] = (
+                "Review paired measurements across the declared contexts and biological "
+                "replicate provenance; identity compatibility alone does not establish "
+                "repeatability."
+            )
     if protected_overlap:
         fraction = float(overlap.get("protected_entity_overlap_fraction", 0.0))
         entity_label = "entity" if protected_overlap == 1 else "entities"
@@ -475,8 +569,14 @@ def _apply_test_class_limit(
     count_unit = str(overlap.get("test_target_count_unit") or "independent units")
     verdict["numbers"]["test_class_counts"] = counts
     verdict["numbers"]["test_class_count_unit"] = count_unit
+    verdict["numbers"]["test_class_count_scope"] = (
+        "Distinct units per class; the same unit may contribute to both classes. "
+        "These are support counts, not disjoint cohorts or effective sample sizes."
+    )
     verdict["numbers"]["minimum_test_class_count_required"] = required
-    verdict["uncertainty"] += f" Minimum holdout class count={observed}."
+    verdict["uncertainty"] += (
+        f" Minimum holdout class count={observed}. Units may contribute to both classes."
+    )
     if observed >= required:
         verdict["evidence_supporting"].append(
             f"Both holdout classes meet the configured minimum of {required}."

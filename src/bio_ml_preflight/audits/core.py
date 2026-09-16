@@ -638,8 +638,8 @@ def audit_overlap(
                 "test_fraction": len(train_ids & test_ids) / max(len(test_ids), 1),
             }
     pair_overlap = None
+    pair_columns = entity_columns[:2] if len(entity_columns) >= 2 else []
     if len(entity_columns) >= 2:
-        pair_columns = entity_columns[:2]
         train_pairs = set(train[pair_columns].itertuples(index=False, name=None))
         test_pairs = set(test[pair_columns].itertuples(index=False, name=None))
         pair_overlap = len(train_pairs & test_pairs)
@@ -652,6 +652,7 @@ def audit_overlap(
         "exact_duplicate_overlap": len(train_hash & test_hash),
         "entity_overlap": entity_overlap,
         "pair_overlap": pair_overlap,
+        "pair_columns": pair_columns,
         "near_duplicate_overlap": {
             "status": "NOT_ASSESSABLE",
             "reason": "No similarity function was configured.",

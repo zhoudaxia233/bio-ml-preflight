@@ -86,12 +86,43 @@ def ranking_stability(
     }, pd.DataFrame(rows)
 
 
+def partition_variation(experiments: pd.DataFrame, primary_metric: str) -> dict[str, Any]:
+    """Describe observed variation without attributing seed changes to resampling."""
+    result: dict[str, Any] = {
+        "status": "NOT_ASSESSABLE",
+        "distinct_partitions": None,
+        "median_standard_deviation": None,
+        "scope": (
+            "Within each scenario, representation and model, summarize runs per partition "
+            "by their median, then describe variation across distinct partitions. "
+            "Training initialization is not separated from split effects; this is not "
+            "a confidence interval or evidence of biological replication."
+        ),
+    }
+    if (
+        experiments.empty
+        or "partition_fingerprint" not in experiments
+        or experiments["partition_fingerprint"].isna().any()
+    ):
+        result["reason"] = "Actual partition membership was not recorded for every run."
+        return result
+    result["distinct_partitions"] = int(experiments["partition_fingerprint"].nunique())
+    strata = [column for column in ["scenario", "representation", "model"] if column in experiments]
+    per_partition = experiments.groupby([*strata, "partition_fingerprint"])[primary_metric].median()
+    variation = per_partition.groupby(level=strata).std().dropna()
+    if variation.empty:
+        result["reason"] = (
+            "Fewer than two distinct partitions within each comparable model/scenario."
+        )
+    else:
+        result["status"] = "ASSESSED"
+        result["median_standard_deviation"] = float(variation.median())
+    return result
+
+
 def stability_decomposition(experiments: pd.DataFrame, primary_metric: str) -> dict[str, Any]:
-    usable = experiments[
-        experiments["model"].ne("dummy")
-        & experiments["permuted"].eq(False)
-        & experiments[primary_metric].notna()
-    ]
+    real = experiments[experiments["model"].ne("dummy") & experiments["permuted"].eq(False)]
+    usable = real[real[primary_metric].notna()]
     if usable.empty:
         return {
             key: {"status": "NOT_ASSESSABLE", "reason": "no finite experiment metrics"}
@@ -105,11 +136,6 @@ def stability_decomposition(experiments: pd.DataFrame, primary_metric: str) -> d
             ]
         }
     representation_columns = ["representation"] if "representation" in usable else []
-    split_std = (
-        usable.groupby(["scenario", *representation_columns, "model"])[primary_metric]
-        .std()
-        .dropna()
-    )
     model_std = (
         usable.groupby(["scenario", *representation_columns, "seed"])[primary_metric].std().dropna()
     )
@@ -124,10 +150,7 @@ def stability_decomposition(experiments: pd.DataFrame, primary_metric: str) -> d
             "status": "NOT_ASSESSABLE",
             "reason": "v0.1 smoke runs do not cross training seeds with fixed split manifests",
         },
-        "train_validation_split": {
-            "status": "ASSESSED",
-            "median_standard_deviation": float(split_std.median()) if len(split_std) else None,
-        },
+        "train_validation_split": partition_variation(real, primary_metric),
         "model_family": {
             "status": "ASSESSED",
             "median_standard_deviation": float(model_std.median()) if len(model_std) else None,

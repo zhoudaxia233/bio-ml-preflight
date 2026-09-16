@@ -131,6 +131,10 @@ def run_case(
                 counts, unit = _test_target_counts(frame, test_indices, case)
                 overlap["test_target_counts"] = counts
                 overlap["test_target_count_unit"] = unit
+                overlap["test_target_count_scope"] = (
+                    "Distinct declared units contributing to each class; one unit may "
+                    "contribute to both. Counts are not disjoint cohorts or effective sample sizes."
+                )
             _validate_protected_entity_isolation(case, scenario, overlap)
             evaluation = frame.iloc[test_indices].reset_index(drop=True)
             scope = f"evaluation_partition:{scenario.name}:seed_{seed}"
@@ -328,6 +332,12 @@ def run_case(
                                     representation=representation,
                                     model_configuration=_model_configuration(perm_model),
                                     permutation_draw=draw,
+                                    permutation_method=(
+                                        "row"
+                                        if groups is None
+                                        else "equal_size_group_blocks_within_group_shuffle"
+                                    ),
+                                    permutation_unit=permutation_unit,
                                 )
                             )
                             permutation_run_id = (
@@ -415,6 +425,10 @@ def run_case(
                             "not_applicable",
                         )
                         baseline_frame.to_parquet(prediction_dir / f"{run_id}.parquet", index=False)
+    for record in records:
+        record["partition_fingerprint"] = manifests[
+            (record["scenario"], record["seed"])
+        ].membership_fingerprint()
     experiments = pd.DataFrame(records)
     learning_curve = pd.DataFrame(
         learning_records,
@@ -648,6 +662,8 @@ def _record(
     representation: str,
     model_configuration: str,
     permutation_draw: int | None = None,
+    permutation_method: str | None = None,
+    permutation_unit: str | None = None,
 ) -> dict[str, Any]:
     return {
         "scenario": scenario,
@@ -661,6 +677,8 @@ def _record(
         "test_rows": test_rows,
         "model_configuration": model_configuration,
         "permutation_draw": permutation_draw,
+        "permutation_method": permutation_method,
+        "permutation_unit": permutation_unit,
     } | metrics
 
 
@@ -808,10 +826,9 @@ def _test_target_counts(
     unit = case.evaluation.bootstrap_unit
     test = frame.iloc[test_indices]
     if unit and unit in test:
-        target_counts = test.groupby(unit, dropna=False)[target].nunique(dropna=False)
-        if (target_counts > 1).any():
-            raise ValueError(f"Independent test unit {unit!r} maps to conflicting targets")
-        support = test.drop_duplicates(unit)
+        # A patient can contribute visits to both classes. Count support per class;
+        # target consistency belongs to the declared prediction-unit audit.
+        support = test.drop_duplicates([unit, target])
         count_unit = unit
     else:
         support = test
