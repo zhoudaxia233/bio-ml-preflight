@@ -536,7 +536,7 @@ def test_low_unstable_baseline_and_weak_permutation_are_all_opposing(
         "The controlled baseline does not meet the configured usefulness threshold."
         in row["unmet_assumptions"]
     )
-    assert "Performance is unstable across the evaluated splits." in row["unmet_assumptions"]
+    assert "Performance is unstable across the evaluated runs." in row["unmet_assumptions"]
     assert "Localize the weak target or split boundary" in row["cheapest_next_evidence"]
 
 

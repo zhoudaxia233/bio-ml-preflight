@@ -4,6 +4,13 @@
 
 `bio-ml-preflight` asks what a dataset and a proposed prediction or ranking claim can support, where that evidence stops, and what inexpensive evidence would reduce the most important uncertainty. It is an evidence audit and bounded baseline runner—not AutoML, a leaderboard, a biological hypothesis generator, or proof of future performance.
 
+This is an instrument for researcher-and-assistant reviews of biological data. Use it for
+repeatable counts, partition checks, bounded fits, and traceable evidence. The researcher and
+assistant supply and review the scientific meaning: the paper's claim, experimental unit,
+assay context, exchangeability assumptions, and limits of interpretation. A capability status
+summarizes configured checks; it is not an independent judgment that a paper's conclusion is true.
+See the [evidence-review workflow](docs/methodology.md#researcher-and-assistant-workflow).
+
 ## Quick start
 
 Python 3.11+ and [uv](https://docs.astral.sh/uv/) are required.

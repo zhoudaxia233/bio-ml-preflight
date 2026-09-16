@@ -25,6 +25,15 @@ class SplitManifest:
     def fingerprint(self) -> str:
         return hashlib.sha256(json.dumps(asdict(self), sort_keys=True).encode()).hexdigest()
 
+    def membership_fingerprint(self) -> str:
+        """Compare partitions of the same dataset without counting seed or row order."""
+        membership = {
+            "train": sorted(self.train_indices),
+            "test": sorted(self.test_indices),
+            "excluded": sorted(self.excluded_indices),
+        }
+        return hashlib.sha256(json.dumps(membership, sort_keys=True).encode()).hexdigest()
+
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = asdict(self) | {"sha256": self.fingerprint()}
